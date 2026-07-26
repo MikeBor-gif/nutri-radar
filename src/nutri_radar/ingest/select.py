@@ -40,6 +40,25 @@ class SelectionStats:
         return self.matched_rows / self.total_rows if self.total_rows else 0.0
 
 
+def matches_corpus(product: RawProduct, settings: IngestSettings) -> bool:
+    """Проходит ли продукт критерии корпуса.
+
+    Питоновский двойник SQL-фильтра из `build_where`. Он нужен потому, что
+    дельта-экспорты читаются построчно из JSONL, а не через DuckDB, и прогнать
+    их тем же запросом нельзя.
+
+    Дублирование критериев в двух формах — осознанная цена, но она опасна:
+    условия могут разъехаться незаметно. Поэтому тест обязан проверять, что обе
+    формы дают **одинаковый набор кодов** на одной фикстуре
+    (`test_ingest_delta.py`). Меняешь одно — меняй и второе.
+    """
+    if not product.is_quality_ok:
+        return False
+    if not product.has_usable_ingredients(settings.languages, settings.min_ingredients_length):
+        return False
+    return bool(set(product.categories_tags) & set(settings.category_tags))
+
+
 def build_where(settings: IngestSettings) -> tuple[str, list[Any]]:
     """Собрать условие отбора и параметры к нему.
 

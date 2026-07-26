@@ -12,7 +12,7 @@ import typer
 
 from nutri_radar.config import get_settings
 from nutri_radar.ingest.download import download_dump
-from nutri_radar.ingest.load import run_load_corpus
+from nutri_radar.ingest.load import run_load_corpus, run_load_deltas
 from nutri_radar.ingest.probe import format_report, probe_schema
 from nutri_radar.ingest.select import collect_stats, format_stats
 from nutri_radar.ingest.sources.parquet import ParquetSource
@@ -92,6 +92,38 @@ def select_corpus(
     )
     if result.skipped:
         typer.echo(f"Пропущено: {result.skipped} ({result.skip_share:.2%})")
+    if result.run_id is not None:
+        typer.echo(f"Прогон в runs: id={result.run_id}")
+
+
+@app.command()
+def delta(
+    days: int | None = typer.Option(
+        None,
+        "--days",
+        help="Окно в днях. По умолчанию — от последнего прогона, максимум 14.",
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Посчитать, не записывая в БД."),
+) -> None:
+    """Применить дельта-экспорты поверх корпуса.
+
+    Формат дельт отличается от полного дампа: JSONL в MongoDB-форме с плоскими
+    ключами. Фильтр корпуса применяется и здесь.
+
+    Ограничение источника: удаления продуктов дельтами НЕ отслеживаются.
+    Полная консистентность достигается только перезаливом дампа.
+    """
+    result = run_load_deltas(get_settings(), days=days, dry_run=dry_run)
+
+    if result.batches == 0:
+        typer.echo("Новых дельт нет — корпус актуален.")
+        return
+
+    action = "Посчитано" if dry_run else "Применено"
+    typer.echo(
+        f"{action}: файлов {result.batches}, принято {result.processed}, "
+        f"отброшено фильтром {result.skipped}, за {result.elapsed_s} с"
+    )
     if result.run_id is not None:
         typer.echo(f"Прогон в runs: id={result.run_id}")
 
