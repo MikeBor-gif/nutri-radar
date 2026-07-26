@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "skills": {
+    "fastapi-python": {
+      "source": "mindrally/skills",
+      "sourceType": "github",
+      "skillPath": "fastapi-python/SKILL.md",
+      "computedHash": "4521c6090735152b7b8df670cefe5c1c6d1dcaa115de67bb96e74ebf802d4f24"
+    },
+    "pgvector-semantic-search": {
+      "source": "timescale/pg-aiguide",
+      "sourceType": "github",
+      "skillPath": "skills/pgvector-semantic-search/SKILL.md",
+      "computedHash": "4f462624190efaee82f7b32d74c2ae46475a805c8e87ef090da6a7999c329723"
+    },
+    "query": {
+      "source": "duckdb/duckdb-skills",
+      "sourceType": "github",
+      "skillPath": "skills/query/SKILL.md",
+      "computedHash": "a0440ce71d592fb66174e2bf82134b1803146b6f49f707d2e205e578f937a4f8"
+    },
+    "read-file": {
+      "source": "duckdb/duckdb-skills",
+      "sourceType": "github",
+      "skillPath": "skills/read-file/SKILL.md",
+      "computedHash": "68b79f4b58e830fa9fae9e58b381be0556b21aae1dddc79947f3a7de1baf6fb0"
+    },
+    "sqlalchemy-alembic-expert-best-practices-code-review": {
+      "source": "wispbit-ai/skills",
+      "sourceType": "github",
+      "skillPath": "skills/sqlalchemy-alembic-expert-best-practices-code-review/SKILL.md",
+      "computedHash": "222668fee09abd99945cc57b9be37eb105470ea0428548e7e4f2e7284bd1d8e2"
+    }
+  }
+}

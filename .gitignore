@@ -1,0 +1,43 @@
+# Данные: дамп OFF ~10 ГБ, в репозиторий не попадает.
+# Исключение — эталонная разметка evals, она создаётся руками и ценна.
+data/
+!data/evals/
+!data/evals/gold.jsonl
+
+# Секреты. В репозиторий идёт только .env.example
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Локальные БД DuckDB
+*.duckdb
+*.duckdb.wal
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Отчёты: графики пересобираются командой, в репозиторий не коммитим.
+# Исключение — зафиксированный baseline метрик для гейта в CI (ADR-008).
+reports/
+!reports/baseline/
+!reports/baseline/**
+
+# IDE и ОС
+.idea/
+.vscode/
+Thumbs.db
+desktop.ini

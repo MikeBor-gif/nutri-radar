@@ -1,0 +1,13 @@
+# Разработка на Windows, CI на ubuntu-latest — нормализуем переводы строк,
+# иначе в репозиторий уедет CRLF и shell-шаги в GitHub Actions начнут падать.
+* text=auto eol=lf
+
+# Бинарное: без нормализации
+*.parquet binary
+*.gz binary
+*.png binary
+*.jpg binary
+*.duckdb binary
+
+# Эталонная разметка — построчный JSON, diff по строкам осмысленный
+*.jsonl text eol=lf
