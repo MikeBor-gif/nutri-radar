@@ -41,6 +41,9 @@ def get_engine(settings: DatabaseSettings | None = None) -> AsyncEngine:
             pool_pre_ping=True,  # отсекает соединения, умершие после простоя
             echo=db.echo_sql,
             future=True,
+            # Без явного таймаута asyncpg ждёт 60 секунд: недоступная база
+            # подвесила бы health-check и тесты вместо быстрого отказа.
+            connect_args={"timeout": db.connect_timeout_s},
         )
         logger.info(
             "Движок БД создан",

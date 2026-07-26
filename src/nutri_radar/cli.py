@@ -15,6 +15,7 @@ import logging
 import typer
 
 from nutri_radar import __version__
+from nutri_radar.health import CheckStatus, run_health_check
 from nutri_radar.logging import setup_logging
 
 logger = logging.getLogger(__name__)
@@ -63,6 +64,49 @@ def main(
 def version() -> None:
     """Показать версию."""
     typer.echo(__version__)
+
+
+# Символы статусов вынесены из кода вывода: менять оформление в одном месте.
+_STATUS_MARK = {
+    CheckStatus.OK: "OK  ",
+    CheckStatus.WARN: "WARN",
+    CheckStatus.FAIL: "FAIL",
+}
+
+
+@app.command()
+def health(
+    as_json: bool = typer.Option(
+        False,
+        "--json",
+        help="Машиночитаемый вывод вместо таблицы.",
+    ),
+) -> None:
+    """Проверить готовность среды: БД, расширение vector, миграции, Ollama, ключ.
+
+    Код возврата 0, если нет ни одного FAIL (WARN не роняет), иначе 1.
+    """
+    report = run_health_check()
+
+    if as_json:
+        typer.echo(report.model_dump_json(indent=2))
+    else:
+        # Вывод для человека идёт в stdout через Typer, логи — в stderr.
+        # print() в библиотечном коде запрещён, здесь это точка входа.
+        width = max(len(check.name) for check in report.checks)
+        for check in report.checks:
+            mark = _STATUS_MARK[check.status]
+            typer.echo(f"[{mark}] {check.name.ljust(width)}  {check.detail}")
+
+        summary = (
+            f"OK: {sum(1 for c in report.checks if c.status is CheckStatus.OK)}, "
+            f"WARN: {len(report.warnings)}, FAIL: {len(report.failures)}"
+        )
+        typer.echo(f"\n{summary}")
+        if not report.is_healthy:
+            typer.echo("Среда не готова: устраните FAIL выше.", err=True)
+
+    raise typer.Exit(code=report.exit_code)
 
 
 if __name__ == "__main__":

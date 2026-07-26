@@ -50,6 +50,9 @@ class DatabaseSettings(BaseSettings):
     password: SecretStr = SecretStr("local_dev_password")
     name: str = "nutri_radar"
     pool_size: int = 5
+    # Дефолт asyncpg — 60 секунд. Столько ждать отказа недоступной базы нельзя:
+    # health-check в compose и тесты повисли бы на минуту вместо быстрого FAIL.
+    connect_timeout_s: float = 10.0
     # SQL-эхо отдельным флагом, а не через LOG_LEVEL: на DEBUG оно забивает
     # вывод целиком и отладка самого пайплайна становится невозможной.
     echo_sql: bool = False
@@ -125,6 +128,19 @@ class AnthropicSettings(BaseSettings):
     cheap_model: str = "claude-haiku-4-5-20251001"
     max_output_tokens: int = 2048
     timeout_s: float = 60.0
+
+    @field_validator("api_key", mode="before")
+    @classmethod
+    def _empty_key_is_none(cls, value: object) -> object:
+        """Пустая строка — это отсутствие ключа, а не ключ.
+
+        В `.env.example` ключ объявлен пустым (`ANTHROPIC__API_KEY=`), и без
+        этой нормализации получался бы `SecretStr("")`, который health-check
+        считал бы заданным ключом.
+        """
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
     @property
     def is_configured(self) -> bool:

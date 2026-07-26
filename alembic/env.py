@@ -38,18 +38,26 @@ target_metadata = Base.metadata
 
 _settings = get_settings()
 
-# Подставляем DSN программно. Значение в alembic.ini остаётся пустым.
-config.set_main_option("sqlalchemy.url", _settings.db.dsn)
+# DSN подставляется из конфига, но только если он не задан явно: интеграционные
+# тесты передают свой URL через Config, чтобы гонять миграции на отдельной базе
+# и не трогать рабочую. Значение в alembic.ini пустое, поэтому обычный запуск
+# всегда берёт настройки проекта.
+_explicit_url = config.get_main_option("sqlalchemy.url", default="")
+if _explicit_url:
+    _target_description = "URL передан явно"
+else:
+    config.set_main_option("sqlalchemy.url", _settings.db.dsn)
+    _target_description = _settings.db.safe_dsn
 
 # Куда именно применяются миграции — видно до их применения, чтобы случайно
 # не миграть не ту базу. Пароль в safe_dsn отсутствует.
-logger.info("Цель миграций: %s", _settings.db.safe_dsn)
+logger.info("Цель миграций: %s", _target_description)
 
 
 def run_migrations_offline() -> None:
     """Режим генерации SQL без подключения к БД (`alembic upgrade head --sql`)."""
     context.configure(
-        url=_settings.db.dsn,
+        url=config.get_main_option("sqlalchemy.url"),
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
