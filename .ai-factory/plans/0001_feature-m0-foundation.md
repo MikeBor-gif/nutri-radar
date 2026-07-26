@@ -126,12 +126,12 @@
 
 ### Фаза 5: CI и витрина
 
-- [ ] **Задача 9:** CI на GitHub Actions — `uv sync --frozen` → `ruff check` →
+- [x] **Задача 9:** CI на GitHub Actions — `uv sync --frozen` → `ruff check` →
       `ruff format --check` → `mypy src` → `alembic upgrade head` → `pytest`
       с сервисным контейнером `pgvector/pgvector:pg16`. Кэш uv, `concurrency`
       с отменой устаревших прогонов. *(зависит от 8)*
       Файлы: `.github/workflows/ci.yml`
-- [ ] **Задача 10:** `README.md` — описание проекта, чем не дублирует OFF,
+- [x] **Задача 10:** `README.md` — описание проекта, чем не дублирует OFF,
       **атрибуция ODbL**, дисклеймер о границах продукта (не медицинский
       советчик, данные краудсорсинговые), быстрый старт, заготовки таблиц метрик
       под M3/M4/M5.

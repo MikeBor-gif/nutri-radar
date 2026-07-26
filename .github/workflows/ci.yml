@@ -1,0 +1,108 @@
+# CI майлстоуна M0: линт, типы, миграции, тесты.
+#
+# Гейт evals добавляется на M7 (ADR-008): он пересчитывает F1 из закоммиченных
+# предсказаний и падает при просадке больше 3 пунктов. Здесь его ещё нет.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Не жжём минуты на устаревших коммитах той же ветки.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    services:
+      db:
+        # Именно pgvector-образ, а не postgres:16 — иначе первая же миграция
+        # с CREATE EXTENSION vector упадёт.
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: nutri
+          POSTGRES_PASSWORD: ci_password
+          POSTGRES_DB: nutri_radar
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U nutri -d nutri_radar"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      # Конфигурация приложения. Секретов на M0 не требуется: ключ Anthropic
+      # понадобится только на M3, и его отсутствие health-check считает WARN.
+      LOG_LEVEL: INFO
+      ENVIRONMENT: ci
+      JSON_LOGS: "true"
+      DB__HOST: localhost
+      DB__PORT: 5432
+      DB__USER: nutri
+      DB__PASSWORD: ci_password
+      DB__NAME: nutri_radar
+      # Ollama в CI нет — health-check пометит это WARN и не упадёт.
+      OLLAMA__BASE_URL: http://127.0.0.1:11434
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Установить uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          # Без кэша каждый прогон переустанавливает зависимости с нуля.
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Установить Python 3.12
+        run: uv python install 3.12
+
+      - name: Синхронизировать зависимости
+        # --frozen: строго по uv.lock, без тихого обновления версий
+        run: uv sync --frozen
+
+      - name: Версии окружения
+        # При расхождении окружений это первое, что нужно знать
+        run: |
+          uv run python --version
+          uv --version
+          uv run ruff --version
+          uv run alembic --version
+
+      - name: Линт
+        run: uv run ruff check .
+
+      - name: Форматирование
+        run: uv run ruff format --check .
+
+      - name: Типы
+        run: uv run mypy src
+
+      - name: Миграции
+        run: uv run alembic upgrade head
+
+      - name: Откат и повторное применение миграций
+        # Проверяет, что downgrade не заглушка: без этого шага цикл миграций
+        # никогда не проверяется, и первый же откат в продакшне сломается.
+        run: |
+          uv run alembic downgrade base
+          uv run alembic upgrade head
+
+      - name: Юнит-тесты
+        # Без -m integration: проверяем, что набор зелёный и без БД
+        run: uv run pytest
+
+      - name: Интеграционные тесты
+        # БД в CI есть, поэтому гоняем и их
+        run: uv run pytest -m integration
+
+      - name: Health-check
+        # Сквозная проверка: команда должна вернуть 0 при живой БД.
+        # Ollama и ключ отсутствуют — это WARN, а не FAIL.
+        run: uv run nutri-radar health
