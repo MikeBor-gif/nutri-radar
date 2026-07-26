@@ -3,8 +3,10 @@
 > Карта проекта для AI-агентов и новых разработчиков. Описывает только то, что
 > реально существует. Обновляется при значимых изменениях структуры.
 >
-> **Текущее состояние: кода ещё нет.** Настроен только контекст (описание,
-> архитектура, правила, скиллы, MCP). Реализация начинается с M0 после плана.
+> **Текущее состояние: M0 выполнен, ждёт ревью.** Есть конфигурация, слой БД,
+> миграции, health-check, 41 тест и CI. Слайсы пайплайна (`ingest`, `extract`,
+> `evals`, `analytics`, `retrieval`, `agent`) и точки входа (`api`, `bot`,
+> `mcp_server`) появляются со своими майлстоунами.
 
 ## О проекте
 
@@ -30,37 +32,55 @@ Nutri Radar разбирает состав пищевых продуктов н
 
 ## Структура проекта
 
-Запланированная раскладка (детали и правила зависимостей — в
-`.ai-factory/ARCHITECTURE.md`):
+`✓` — существует, `—` — появится со своим майлстоуном. Детали и правила
+зависимостей — в `.ai-factory/ARCHITECTURE.md`.
 
 ```text
 nutri-radar/
-├── README.md                  # витрина: что, зачем, метрики, графики, атрибуция ODbL
-├── CLAUDE.md                  # свод правил работы над проектом
-├── DECISIONS.md               # журнал архитектурных решений (ADR)
-├── docker-compose.yml         # Postgres+pgvector; Langfuse в профиле tracing
-├── .env.example               # все ключи конфигурации без значений
-├── pyproject.toml             # зависимости и настройки ruff / pytest / mypy
-├── alembic/                   # миграции БД
+├── README.md                  ✓ витрина: метрики, быстрый старт, атрибуция ODbL
+├── CLAUDE.md                  ✓ свод правил работы над проектом
+├── DECISIONS.md               ✓ журнал архитектурных решений (ADR-001..013)
+├── AGENTS.md                  ✓ этот файл
+├── docker-compose.yml         ✓ Postgres+pgvector; Langfuse в профиле tracing
+├── Dockerfile                 ✓ многостадийный, непривилегированный пользователь
+├── .env.example               ✓ 34 ключа конфигурации, сверяется тестом
+├── pyproject.toml             ✓ зависимости, ruff / pytest / mypy
+├── uv.lock                    ✓ закреплённые версии (CI ставит --frozen)
+├── .github/workflows/ci.yml   ✓ линт, типы, миграции, тесты, health-check
+├── alembic/
+│   ├── env.py                 ✓ DSN из конфига, не из alembic.ini
+│   └── versions/
+│       └── 20260726_0001_...  ✓ расширение vector + таблица runs
 ├── src/nutri_radar/
-│   ├── config.py              # pydantic-settings — единственный источник параметров
-│   ├── errors.py              # NutriRadarError и доменные исключения
-│   ├── tracing.py             # порт трассировки + no-op по умолчанию
-│   ├── llm/                   # ОБЩЕЕ: порты и адаптеры языковых моделей
-│   ├── db/                    # ОБЩЕЕ: модели SQLAlchemy, сессии, репозитории
-│   ├── ingest/                # СЛАЙС: дамп, DuckDB-выборка, заливка, дельты
-│   ├── extract/               # СЛАЙС: JSON-схемы, промпты, нормализация, формы сахара
-│   ├── evals/                 # СЛАЙС: разметка, метрики, сравнение моделей, гейт для CI
-│   ├── analytics/             # СЛАЙС: classic ML на метках из базы, отчёты
-│   ├── retrieval/             # СЛАЙС: эмбеддинги, pgvector-поиск, RAG
-│   ├── agent/                 # СЛАЙС: инструменты и цикл агента
-│   ├── api/                   # ТОЧКА ВХОДА: FastAPI
-│   ├── bot/                   # ТОЧКА ВХОДА: Telegram (aiogram 3)
-│   └── mcp_server/            # ТОЧКА ВХОДА: MCP поверх базы
-├── tests/                     # структура зеркалит слайсы; tests/data/ — фикстуры
-├── notebooks/                 # только разведка, не продакшн-код
-├── reports/                   # графики и отчёты evals
-└── data/                      # gitignored, кроме data/evals/gold.jsonl
+│   ├── __init__.py            ✓ __version__
+│   ├── config.py              ✓ pydantic-settings — единственный источник параметров
+│   ├── errors.py              ✓ NutriRadarError и доменные исключения
+│   ├── logging.py             ✓ JSON и человекочитаемый формат, фильтр секретов
+│   ├── tracing.py             ✓ порт Tracer + NoOpTracer
+│   ├── health.py              ✓ пять проверок готовности среды
+│   ├── cli.py                 ✓ корень Typer: version, health
+│   ├── db/                    ✓ ОБЩЕЕ: Base, async-движок, сессии
+│   │   ├── base.py            ✓ DeclarativeBase с naming_convention
+│   │   ├── session.py         ✓ движок, expire_on_commit=False
+│   │   └── models/run.py      ✓ таблица runs — журнал прогонов
+│   ├── llm/                   — ОБЩЕЕ: порты и адаптеры моделей (M2)
+│   ├── ingest/                — СЛАЙС: дамп, DuckDB-выборка, дельты (M1)
+│   ├── extract/               — СЛАЙС: схемы, промпты, формы сахара (M2)
+│   ├── evals/                 — СЛАЙС: разметка, метрики, гейт для CI (M3)
+│   ├── analytics/             — СЛАЙС: classic ML на метках из базы (M4)
+│   ├── retrieval/             — СЛАЙС: эмбеддинги, pgvector, RAG (M5)
+│   ├── agent/                 — СЛАЙС: инструменты и цикл агента (M6)
+│   ├── api/                   — ТОЧКА ВХОДА: FastAPI (M7)
+│   ├── bot/                   — ТОЧКА ВХОДА: Telegram, aiogram 3 (M7)
+│   └── mcp_server/            — ТОЧКА ВХОДА: MCP поверх базы (M7)
+├── tests/
+│   ├── conftest.py            ✓ герметичные настройки, мок Ollama, тестовая БД
+│   ├── test_config.py         ✓ секреты, валидаторы, сверка .env.example
+│   ├── test_health.py         ✓ WARN против FAIL, изоляция проверок
+│   └── test_logging.py        ✓ вычищение секретов, форматтеры
+├── notebooks/                 — только разведка, не продакшн-код
+├── reports/                   — графики и отчёты evals
+└── data/                      — gitignored, кроме data/evals/gold.jsonl
 ```
 
 Ключевое правило зависимостей: точки входа → слайсы → общее. Слайсы **не зависят
@@ -72,13 +92,17 @@ nutri-radar/
 | Файл | Назначение |
 |---|---|
 | `src/nutri_radar/config.py` | все параметры проекта; начинать чтение кода отсюда |
+| `src/nutri_radar/cli.py` | точка входа `nutri-radar`; слайсы регистрируют команды здесь |
+| `src/nutri_radar/health.py` | проверка готовности среды: БД, vector, миграции, Ollama, ключ |
+| `src/nutri_radar/db/session.py` | движок и сессии; `expire_on_commit=False` обязателен |
+| `alembic/env.py` | DSN берётся из конфига; уважает URL, переданный явно |
 | `pyproject.toml` | зависимости, настройки ruff / pytest / mypy |
 | `docker-compose.yml` | Postgres+pgvector; Langfuse в профиле `tracing` |
-| `.env.example` | полный список ключей конфигурации |
+| `.env.example` | полный список ключей; сверяется тестом с полями `Settings` |
 | `alembic/versions/` | история схемы БД |
-| `src/nutri_radar/extract/schemas.py` | Pydantic-схема выхода LLM = JSON-схема генерации |
-| `src/nutri_radar/llm/ports.py` | порты внешних моделей; точка подмены провайдера |
-| `data/evals/gold.jsonl` | эталонная разметка; **создаётся только человеком** |
+| `src/nutri_radar/extract/schemas.py` | *(M2)* Pydantic-схема выхода LLM = JSON-схема генерации |
+| `src/nutri_radar/llm/ports.py` | *(M2)* порты внешних моделей; точка подмены провайдера |
+| `data/evals/gold.jsonl` | *(M3)* эталонная разметка; **создаётся только человеком** |
 
 ## Документация
 
@@ -116,5 +140,12 @@ nutri-radar/
 - **Разбивать shell-команды на отдельные шаги**, не склеивать через `&&`:
   - ❌ неверно: `git checkout main && git pull`
   - ✅ верно: сначала `git checkout main`, затем `git pull origin main`
-- Проект **пока не является git-репозиторием**. `git init` — первый шаг M0;
-  в `.ai-factory/config.yaml` git-режим уже включён в расчёте на это.
+- **Порт БД на машине разработчика — 5435**, а не 5432: последний занят службой
+  PostgreSQL 18, а 5433 и 5434 — контейнерами других проектов. Симптом коллизии
+  неочевиден, подробности в ADR-013.
+- **`DB__HOST` и `OLLAMA__BASE_URL` в compose заданы жёстко**, не подстановкой
+  из `.env`: изнутри контейнера `localhost` означает сам контейнер.
+- Пароли не должны быть подстроками имён пользователя или БД — фильтр
+  логирования вычищает секрет буквально и затрёт их тоже (ADR-010).
+- Тесты, требующие БД, помечаются маркером `integration` и по умолчанию не
+  отбираются: `uv run pytest` обязан быть зелёным без докера.

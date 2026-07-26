@@ -67,6 +67,7 @@
 | Валидация и конфиг | Pydantic v2, pydantic-settings |
 | HTTP | httpx (async) |
 | API | FastAPI + uvicorn |
+| CLI | Typer (ADR-011) |
 | ML | pandas, scikit-learn, matplotlib |
 | LLM массовый прогон | `qwen2.5:3b-instruct-q4_K_M` через Ollama, генерация по JSON-схеме |
 | LLM агент и эталон evals | **Anthropic Claude** (Sonnet 5 для агента, он же эталон; Haiku 4.5 для дешёвых массовых прогонов) |
@@ -75,6 +76,7 @@
 | Бот | aiogram 3 |
 | Трассировка | Langfuse self-hosted, отдельный compose-профиль, выключен по умолчанию |
 | MCP | официальный Python SDK (`mcp`) |
+| Логирование | стандартный `logging` + свой форматтер, без зависимости (ADR-010) |
 | Тесты / линт | pytest, pytest-asyncio, ruff, mypy нестрого |
 | Инфра | Docker Compose, GitHub Actions |
 
