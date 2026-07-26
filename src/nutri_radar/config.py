@@ -227,6 +227,49 @@ class IngestSettings(BaseSettings):
         return self.data_dir / "food.parquet"
 
 
+class ExtractSettings(BaseSettings):
+    """Параметры извлечения структуры состава (M2)."""
+
+    model_config = SettingsConfigDict(env_prefix="EXTRACT__", env_file=_ENV_FILE, extra="ignore")
+
+    # Версия промпта для прогона. Уезжает в product_extraction рядом
+    # с результатом: без неё сравнение версий в M3 невозможно.
+    prompt_version: str = "v3"
+
+    # Целевой размер LLM-корпуса. Бриф: 3-5 тысяч. Больше не надо —
+    # локальная модель будет молотить сутки, а выводы не изменятся.
+    corpus_size: int = 3000
+
+    # Доля корпуса со смещением в unknown_ingredients_n > 0 (ADR-006):
+    # туда, где парсер OFF не справился. Остальное — контрольная случайная
+    # часть, без неё нельзя честно показать поведение на лёгких случаях.
+    unknown_share: float = 0.7
+
+    # Детерминированность выборки. Повторный запуск обязан дать ТУ ЖЕ
+    # выборку, иначе сравнение версий промптов пойдёт по разным продуктам.
+    random_seed: int = 42
+
+    # Доля невалидных ответов, выше которой запускать полный прогон нельзя.
+    max_invalid_share: float = 0.1
+
+    # Порог экстраполяции замера: дольше — повод сузить корпус, а не ждать.
+    max_run_hours: float = 6.0
+
+    @field_validator("unknown_share")
+    @classmethod
+    def _validate_share(cls, value: float) -> float:
+        if not 0.0 <= value <= 1.0:
+            raise ValueError(f"unknown_share={value} должна быть в диапазоне 0..1")
+        return value
+
+    @field_validator("corpus_size")
+    @classmethod
+    def _validate_corpus_size(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError(f"corpus_size={value} должен быть >= 1")
+        return value
+
+
 class LLMSettings(BaseSettings):
     """Выбор провайдера. По нему composition root подставляет адаптер."""
 
@@ -245,6 +288,7 @@ class Settings(BaseSettings):
     ollama: OllamaSettings = Field(default_factory=OllamaSettings)
     anthropic: AnthropicSettings = Field(default_factory=AnthropicSettings)
     ingest: IngestSettings = Field(default_factory=IngestSettings)
+    extract: ExtractSettings = Field(default_factory=ExtractSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
 
     def secret_values(self) -> frozenset[str]:
@@ -275,6 +319,8 @@ class Settings(BaseSettings):
             "ingest_languages": self.ingest.languages,
             "ingest_categories_count": len(self.ingest.category_tags),
             "ingest_batch_size": self.ingest.batch_size,
+            "prompt_version": self.extract.prompt_version,
+            "corpus_size": self.extract.corpus_size,
         }
 
 
