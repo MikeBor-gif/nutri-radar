@@ -305,9 +305,7 @@ def build_delta_records() -> list[dict[str, Any]]:
 
 def write_delta_fixture(path: Path = DELTA_FIXTURE) -> Path:
     """Собрать gzip-JSONL дельта-экспорта."""
-    lines = "\n".join(
-        json.dumps(record, ensure_ascii=False) for record in build_delta_records()
-    )
+    lines = "\n".join(json.dumps(record, ensure_ascii=False) for record in build_delta_records())
     with gzip.open(path, "wt", encoding="utf-8") as handle:
         handle.write(lines + "\n")
     return path
