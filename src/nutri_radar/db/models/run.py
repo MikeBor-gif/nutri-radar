@@ -46,12 +46,22 @@ class RunStatus(StrEnum):
 # create_constraint=True обязателен. По умолчанию в SQLAlchemy он False, и тогда
 # колонка становится обычным VARCHAR без всякой проверки — база молча примет
 # любую строку, хотя тип объявлен перечислением.
+#
+# values_callable обязателен. По умолчанию SQLAlchemy хранит ИМЯ члена
+# перечисления (`INGEST`), а не значение (`ingest`), и запись падает на
+# CHECK-ограничении, написанном по значениям. `alembic check` этого не ловит:
+# содержимое CHECK он не сравнивает.
+def _enum_values(enum_class: type[StrEnum]) -> list[str]:
+    return [member.value for member in enum_class]
+
+
 _STAGE_ENUM = Enum(
     RunStage,
     native_enum=False,
     create_constraint=True,
     length=32,
     validate_strings=True,
+    values_callable=_enum_values,
     name="runstage",
 )
 _STATUS_ENUM = Enum(
@@ -60,6 +70,7 @@ _STATUS_ENUM = Enum(
     create_constraint=True,
     length=16,
     validate_strings=True,
+    values_callable=_enum_values,
     name="runstatus",
 )
 

@@ -1,0 +1,177 @@
+"""Запись продуктов в Postgres.
+
+Ключевое требование DoD майлстоуна: **повторный запуск не создаёт дублей**.
+Отсюда upsert по `code` через `ON CONFLICT`, а не «сначала SELECT, потом
+INSERT»: последнее дало бы на 100 тыс. строк 100 тыс. лишних запросов и гонку
+при параллельных прогонах.
+
+Второе требование, менее очевидное: **старый дамп не должен откатывать данные
+назад**. Поэтому обновление происходит только если пришедшая ревизия свежее
+сохранённой. Условие живёт в самом `ON CONFLICT ... WHERE`, а не в Python:
+иначе между чтением и записью вклинилась бы гонка.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from nutri_radar.db.models.product import Product, ProductRaw
+from nutri_radar.ingest.models import RawProduct
+
+logger = logging.getLogger(__name__)
+
+# Соответствие «имя нутриента в источнике» → «колонка в products».
+# Имена подтверждены разведкой дампа, а не взяты из документации по CSV.
+NUTRIENT_COLUMNS = {
+    "energy-kcal": "energy_kcal_100g",
+    "fat": "fat_100g",
+    "saturated-fat": "saturated_fat_100g",
+    "carbohydrates": "carbohydrates_100g",
+    "sugars": "sugars_100g",
+    "fiber": "fiber_100g",
+    "proteins": "proteins_100g",
+    "salt": "salt_100g",
+    "sodium": "sodium_100g",
+    "fruits-vegetables-nuts-estimate-from-ingredients": "fruits_vegetables_nuts_estimate_100g",
+    "nutrition-score-fr": "nutrition_score_fr_100g",
+}
+
+
+class ProductRepository:
+    """Батчевая запись продуктов."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def upsert_batch(
+        self,
+        products: list[RawProduct],
+        *,
+        languages: list[str],
+        min_ingredients_length: int,
+        dump_version: str | None,
+    ) -> tuple[int, int]:
+        """Записать батч в `products_raw` и `products`.
+
+        Returns:
+            Пара (сколько строк затронуто в raw, сколько в products).
+        """
+        if not products:
+            return 0, 0
+
+        raw_rows = [self._raw_row(product, dump_version) for product in products]
+        product_rows = [
+            self._product_row(product, languages, min_ingredients_length) for product in products
+        ]
+
+        raw_count = await self._upsert(ProductRaw, raw_rows)
+        # products пишется вторым: на нём внешний ключ на products_raw.
+        product_count = await self._upsert(Product, product_rows)
+
+        logger.debug(
+            "Батч записан",
+            extra={"raw": raw_count, "products": product_count, "batch": len(products)},
+        )
+        return raw_count, product_count
+
+    async def _upsert(self, model: type[ProductRaw] | type[Product], rows: list[dict]) -> int:
+        """Вставить или обновить строки по первичному ключу `code`.
+
+        Обновление выполняется, только если новая ревизия строго свежее
+        сохранённой. Записи без ревизии не перетирают запись с известной
+        ревизией: `NULL` в сравнении даёт `NULL`, поэтому условие приходится
+        писать явно.
+        """
+        statement = insert(model).values(rows)
+        updatable = {
+            column.name: statement.excluded[column.name]
+            for column in model.__table__.columns
+            if column.name != "code"
+        }
+
+        statement = statement.on_conflict_do_update(
+            index_elements=["code"],
+            set_=updatable,
+            where=(
+                # Сохранённая ревизия неизвестна — обновляем: отказывать не на
+                # основании чего.
+                model.rev.is_(None)
+                # Обе известны — обновляем, только если пришедшая не старее.
+                #
+                # Случай «пришла запись БЕЗ ревизии, а сохранённая с ревизией»
+                # намеренно не покрыт ни одним условием: сравнение с NULL даёт
+                # NULL, условие ложно, обновления не будет. Именно это и нужно —
+                # запись без ревизии не должна перетирать известную.
+                | (statement.excluded.rev >= model.rev)
+            ),
+        )
+        result = await self._session.execute(statement)
+        # rowcount есть у CursorResult, но статически execute объявлен как
+        # Result — берём через getattr, чтобы не врать типами.
+        return int(getattr(result, "rowcount", 0) or 0)
+
+    @staticmethod
+    def _raw_row(product: RawProduct, dump_version: str | None) -> dict[str, Any]:
+        return {
+            "code": product.code,
+            # Полный снимок: сырое не перезаписывается деструктивно, и новая
+            # колонка достаётся отсюда без повторного скачивания дампа.
+            "payload": product.to_raw_json(),
+            "source": product.source,
+            "dump_version": dump_version,
+            "rev": product.rev,
+        }
+
+    @staticmethod
+    def _product_row(
+        product: RawProduct,
+        languages: list[str],
+        min_ingredients_length: int,
+    ) -> dict[str, Any]:
+        picked = product.pick_ingredients_text(languages, min_ingredients_length)
+        ingredients_text, ingredients_lang = (picked[1], picked[0]) if picked else (None, None)
+
+        row: dict[str, Any] = {
+            "code": product.code,
+            "product_name": product.pick_name(languages),
+            "generic_name": next(iter(product.generic_name.values()), None),
+            "brands": product.brands,
+            "ingredients_text": ingredients_text,
+            "ingredients_text_lang": ingredients_lang,
+            "lang": product.lang,
+            "languages": product.languages,
+            "categories_tags": product.categories_tags,
+            "food_groups_tags": product.food_groups_tags,
+            "countries_tags": product.countries_tags,
+            "labels_tags": product.labels_tags,
+            "nutriscore_grade": product.nutriscore_grade,
+            "nutriscore_score": product.nutriscore_score,
+            "nova_group": product.nova_group,
+            "nutrition_data_per": product.nutrition_data_per,
+            "has_nutrition_data": product.has_nutrition_data,
+            "ingredients_tags": product.ingredients_tags,
+            "additives_tags": product.additives_tags,
+            "allergens_tags": product.allergens_tags,
+            "traces_tags": product.traces_tags,
+            "ingredients_analysis_tags": product.ingredients_analysis_tags,
+            "ingredients_n": product.ingredients_n,
+            "known_ingredients_n": product.known_ingredients_n,
+            "unknown_ingredients_n": product.unknown_ingredients_n,
+            "additives_n": product.additives_n,
+            "unique_scans_n": product.unique_scans_n,
+            "popularity_key": product.popularity_key,
+            "completeness": product.completeness,
+            "rev": product.rev,
+            "last_modified_t": product.last_modified_t,
+        }
+
+        # Отсутствующий нутриент остаётся NULL, а не нулём: ноль — осмысленное
+        # значение, и подмена уехала бы в обучение M4 как настоящее измерение.
+        for source_name, column in NUTRIENT_COLUMNS.items():
+            row[column] = product.nutriments.get(source_name)
+
+        return row

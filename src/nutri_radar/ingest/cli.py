@@ -12,7 +12,10 @@ import typer
 
 from nutri_radar.config import get_settings
 from nutri_radar.ingest.download import download_dump
+from nutri_radar.ingest.load import run_load_corpus
 from nutri_radar.ingest.probe import format_report, probe_schema
+from nutri_radar.ingest.select import collect_stats, format_stats
+from nutri_radar.ingest.sources.parquet import ParquetSource
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +49,51 @@ def dump(
             f"за {result.elapsed_s / 60:.1f} мин"
         )
     typer.echo(f"Версия дампа: {result.dump_version}")
+
+
+@app.command(name="select")
+def select_corpus(
+    limit: int | None = typer.Option(None, "--limit", help="Ограничить число строк (отладка)."),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Посчитать и показать статистику, ничего не записывая в БД.",
+    ),
+    stats: bool = typer.Option(
+        False,
+        "--stats",
+        help="Подробная статистика выборки: языки, оценки, пригодность для M2 и M4.",
+    ),
+) -> None:
+    """Отобрать корпус из дампа и залить в Postgres.
+
+    Фильтрация идёт в DuckDB до Postgres: в базу уезжает подмножество, а не
+    все 4,63 млн строк. Повторный запуск не создаёт дублей.
+    """
+    settings = get_settings()
+
+    if stats:
+        source = ParquetSource(settings.ingest)
+        con = source.connect()
+        try:
+            collected = collect_stats(source, settings.ingest, con)
+        finally:
+            con.close()
+        typer.echo(format_stats(collected))
+        if not dry_run:
+            typer.echo("")
+
+    result = run_load_corpus(settings, limit=limit, dry_run=dry_run)
+
+    action = "Посчитано" if dry_run else "Залито"
+    typer.echo(
+        f"{action}: {result.processed} строк за {result.elapsed_s} с "
+        f"({result.rows_per_second:.0f} строк/с)"
+    )
+    if result.skipped:
+        typer.echo(f"Пропущено: {result.skipped} ({result.skip_share:.2%})")
+    if result.run_id is not None:
+        typer.echo(f"Прогон в runs: id={result.run_id}")
 
 
 @app.command()

@@ -179,6 +179,26 @@ def _log_stats(stats: SelectionStats, settings: IngestSettings) -> None:
         )
 
 
+def format_stats(stats: SelectionStats) -> str:
+    """Человекочитаемая статистика выборки для CLI."""
+    lines = [
+        f"Всего строк в дампе:  {stats.total_rows}",
+        f"Прошло фильтр:        {stats.matched_rows} ({stats.match_share:.2%})",
+        "",
+        "Языки состава:",
+    ]
+    lines.extend(f"  {lang:6s} {count:8d}" for lang, count in stats.by_language.items())
+    lines.append("")
+    lines.append("Оценка качества питания:")
+    lines.extend(f"  {grade:10s} {count:8d}" for grade, count in stats.by_grade.items())
+    lines.append("")
+    lines.append(f"С таблицей питательности:      {stats.with_nutrition}  (пригодны для M4)")
+    lines.append(
+        f"Парсер OFF не справился:      {stats.unknown_ingredients}  (кандидаты в LLM-корпус M2)"
+    )
+    return "\n".join(lines)
+
+
 def iter_selected(
     source: ParquetSource,
     settings: IngestSettings,

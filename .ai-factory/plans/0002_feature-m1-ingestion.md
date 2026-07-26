@@ -114,7 +114,7 @@
       раздела 6 брифа: фильтрация **до** Postgres. Итератор батчами, а не список.
       Статистика выборки до заливки. *(зависит от 1, 3)*
       Файлы: `src/nutri_radar/ingest/sources/parquet.py`, `select.py`
-- [ ] **Задача 6:** `ingest select` — батчевая заливка с идемпотентным upsert
+- [x] **Задача 6:** `ingest select` — батчевая заливка с идемпотентным upsert
       по `code` с учётом `rev`: старый дамп не откатывает данные назад.
       Прогресс в `runs`. *(зависит от 4, 5)*
       Файлы: `src/nutri_radar/ingest/load.py`, `db/repositories/product.py`
