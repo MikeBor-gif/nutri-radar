@@ -85,15 +85,15 @@
 
 ### Фаза 1: контракты
 
-- [ ] **Задача 1:** Модуль `llm` — `Protocol StructuredLLM`, адаптер Ollama
+- [x] **Задача 1:** Модуль `llm` — `Protocol StructuredLLM`, адаптер Ollama
       с явным `num_ctx` и `keep_alive`, `FakeLLM` для тестов, семафор
       параллелизма. Отдельно от `extract`, потому что потребителей четыре.
       Файлы: `src/nutri_radar/llm/{ports,models}.py`, `llm/adapters/{ollama,fake}.py`
-- [ ] **Задача 2:** `ExtractionResult` — Pydantic-схема, которая уходит в `format`
+- [x] **Задача 2:** `ExtractionResult` — Pydantic-схема, которая уходит в `format`
       и одновременно валидирует ответ. Свойства `distinct_sugar_forms`
       и `e_additives_count` считаются в модели, чтобы тестироваться без LLM.
       Файлы: `src/nutri_radar/extract/schemas.py`
-- [ ] **Задача 3:** Предобработка: снять HTML и сущности, схлопнуть пробелы,
+- [x] **Задача 3:** Предобработка: снять HTML и сущности, схлопнуть пробелы,
       пометить составы длиннее `num_ctx`. Скобки **не** разворачивать —
       вложенность несёт смысл, и модель её извлекает.
       Файлы: `src/nutri_radar/extract/preprocess.py`
