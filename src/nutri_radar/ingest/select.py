@@ -56,6 +56,8 @@ def matches_corpus(product: RawProduct, settings: IngestSettings) -> bool:
         return False
     if not product.has_usable_ingredients(settings.languages, settings.min_ingredients_length):
         return False
+    if settings.require_scanned and not (product.unique_scans_n or 0) > 0:
+        return False
     return bool(set(product.categories_tags) & set(settings.category_tags))
 
 
@@ -83,6 +85,12 @@ def build_where(settings: IngestSettings) -> tuple[str, list[Any]]:
         settings.min_ingredients_length,
         settings.category_tags,
     ]
+
+    if settings.require_scanned:
+        # Продукт хоть раз сканировали в приложении — значит он существует
+        # на полке, а не остался заброшенной тестовой записью.
+        where += " AND coalesce(unique_scans_n, 0) > 0"
+
     return " ".join(where.split()), params
 
 

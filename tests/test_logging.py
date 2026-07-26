@@ -145,3 +145,37 @@ class TestFormatters:
             log_filter.filter(record)
 
         assert "сверхсекрет" not in handler.formatter.format(record)
+
+
+class TestSafeExtra:
+    """Ключ, совпадающий со стандартным полем LogRecord, роняет вызов логирования.
+
+    Проверено на практике: `extra={"name": ...}` уронил прогон дельт с
+    KeyError. Ошибка в диагностике не должна ронять рабочий код.
+    """
+
+    def test_коллизия_переименовывается(self):
+        from nutri_radar.logging import safe_extra
+
+        assert safe_extra(name="файл.gz") == {"x_name": "файл.gz"}
+        assert safe_extra(module="x", args="y") == {"x_module": "x", "x_args": "y"}
+
+    def test_обычные_ключи_не_трогаются(self):
+        from nutri_radar.logging import safe_extra
+
+        assert safe_extra(file_name="a", count=3) == {"file_name": "a", "count": 3}
+
+    def test_логирование_с_коллизией_не_падает(self):
+        from nutri_radar.logging import safe_extra
+
+        setup_logging("INFO")
+        logger = logging.getLogger("тест-коллизии")
+        logger.info("сообщение", extra=safe_extra(name="значение"))
+
+    def test_сырая_коллизия_действительно_падает(self):
+        """Фиксирует поведение stdlib, ради которого нужна обёртка."""
+        setup_logging("INFO")
+        logger = logging.getLogger("тест-коллизии")
+
+        with pytest.raises(KeyError):
+            logger.info("сообщение", extra={"name": "значение"})

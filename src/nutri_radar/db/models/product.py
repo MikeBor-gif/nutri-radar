@@ -86,9 +86,15 @@ class Product(Base):
     )
 
     # --- тексты -------------------------------------------------------------
-    product_name: Mapped[str | None] = mapped_column(String(512), nullable=True)
-    generic_name: Mapped[str | None] = mapped_column(String(512), nullable=True)
-    brands: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    #
+    # Без ограничения длины. Это краудсорсинговые поля, которые заполняют люди:
+    # угаданный предел даёт не защиту, а отказ записи. Проверено на дампе —
+    # `generic_name` доходит до 1131 символа при «разумном» лимите 512.
+    # В Postgres `text` и `varchar(n)` хранятся одинаково, так что ограничение
+    # не экономит ничего, зато добавляет режим отказа.
+    product_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    generic_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    brands: Mapped[str | None] = mapped_column(String, nullable=True)
 
     # Состав на одном языке — том, который реально пойдёт в LLM.
     # Полный словарь по языкам остаётся в products_raw.payload.

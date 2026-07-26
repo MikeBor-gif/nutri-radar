@@ -81,7 +81,7 @@ def parse_index(content: str) -> list[DeltaFile]:
             continue
         match = _TIMESTAMP_RE.search(name)
         if not match:
-            logger.warning("Имя файла дельты без таймстампа, пропущено", extra={"name": name})
+            logger.warning("Имя файла дельты без таймстампа, пропущено", extra={"file_name": name})
             continue
         files.append(DeltaFile(name=name, timestamp=int(match.group(1))))
 
@@ -258,7 +258,7 @@ def download_delta(client: httpx.Client, file: DeltaFile, settings: IngestSettin
     target.parent.mkdir(parents=True, exist_ok=True)
 
     if target.exists() and target.stat().st_size > 0:
-        logger.debug("Файл дельты уже скачан", extra={"name": file.name})
+        logger.debug("Файл дельты уже скачан", extra={"file_name": file.name})
         return target
 
     url = file.url(settings.delta_index_url)
@@ -267,6 +267,6 @@ def download_delta(client: httpx.Client, file: DeltaFile, settings: IngestSettin
     target.write_bytes(response.content)
     logger.debug(
         "Файл дельты скачан",
-        extra={"name": file.name, "size_kb": round(len(response.content) / 1024, 1)},
+        extra={"file_name": file.name, "size_kb": round(len(response.content) / 1024, 1)},
     )
     return target

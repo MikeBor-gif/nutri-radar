@@ -55,6 +55,12 @@ _STANDARD_RECORD_FIELDS = frozenset(
 
 _REDACTED = "***"
 
+# Ключ в extra=, совпадающий со стандартным полем LogRecord, роняет вызов
+# логирования с KeyError. Проверено на практике: `extra={"name": ...}` уронил
+# прогон дельт. Такие ключи переименовываются с префиксом, а не отбрасываются —
+# данные в логе важнее красоты имени.
+_EXTRA_COLLISION_PREFIX = "x_"
+
 # Пароль внутри URL вида postgresql+asyncpg://user:password@host:5432/db
 _DSN_PASSWORD_RE = re.compile(r"(?P<prefix>://[^:/@\s]+:)(?P<secret>[^@\s]+)(?P<suffix>@)")
 
@@ -135,6 +141,21 @@ class HumanFormatter(logging.Formatter):
             rendered = ", ".join(f"{key}={value!r}" for key, value in sorted(extras.items()))
             base = f"{base} {{{rendered}}}"
         return base
+
+
+def safe_extra(**fields: Any) -> dict[str, Any]:
+    """Подготовить `extra=` так, чтобы вызов логирования не упал.
+
+    `logging` запрещает перезаписывать стандартные поля `LogRecord` и бросает
+    `KeyError` прямо в месте вызова — то есть ошибка в диагностике роняет
+    рабочий код. Ключи-коллизии переименовываются, а не отбрасываются.
+
+    Пример: `safe_extra(name="файл.gz")` даст `{"x_name": "файл.gz"}`.
+    """
+    return {
+        (f"{_EXTRA_COLLISION_PREFIX}{key}" if key in _STANDARD_RECORD_FIELDS else key): value
+        for key, value in fields.items()
+    }
 
 
 def setup_logging(

@@ -169,16 +169,31 @@ class TestReadFile:
 
 
 class TestFilterOnDelta:
-    def test_фильтр_корпуса_применяется_и_к_дельтам(self, ingest_settings):
-        """Дельта может принести продукт из чужой категории."""
-        accepted = []
+    @staticmethod
+    def _accepted(settings) -> list[str]:
+        result = []
         for record in iter_records(DELTA_FIXTURE):
             product = to_raw_product(record)
-            if product is not None and matches_corpus(product, ingest_settings):
-                accepted.append(product.code)
+            if product is not None and matches_corpus(product, settings):
+                result.append(product.code)
+        return result
+
+    def test_фильтр_корпуса_применяется_и_к_дельтам(self, ingest_settings):
+        """Дельта может принести продукт из чужой категории."""
+        accepted = self._accepted(ingest_settings)
 
         assert accepted == ["1000000000001", "1000000000002"]
-        assert "2000000000006" not in accepted
+        assert "2000000000006" not in accepted, "чужая категория"
+
+    def test_несканированный_продукт_отсекается(self, ingest_settings):
+        """Никем не сканированный продукт — заброшенная запись (ADR-014)."""
+        assert "2000000000008" not in self._accepted(ingest_settings)
+
+    def test_без_require_scanned_несканированный_проходит(self, ingest_settings):
+        """Критерий должен отключаться настройкой, а не быть зашитым."""
+        relaxed = ingest_settings.model_copy(update={"require_scanned": False})
+
+        assert "2000000000008" in self._accepted(relaxed)
 
 
 class TestFormatsAgree:

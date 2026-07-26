@@ -24,6 +24,12 @@ from nutri_radar.ingest.models import RawProduct
 
 logger = logging.getLogger(__name__)
 
+# Предел числа аргументов одного запроса в протоколе Postgres: поле int16.
+# asyncpg сообщает о нём как «the number of query arguments cannot exceed
+# 32767». Ограничение на АРГУМЕНТЫ, а не на строки, поэтому допустимый размер
+# куска зависит от числа колонок таблицы.
+_MAX_QUERY_ARGS = 32767
+
 # Соответствие «имя нутриента в источнике» → «колонка в products».
 # Имена подтверждены разведкой дампа, а не взяты из документации по CSV.
 NUTRIENT_COLUMNS = {
@@ -81,11 +87,21 @@ class ProductRepository:
     async def _upsert(self, model: type[ProductRaw] | type[Product], rows: list[dict]) -> int:
         """Вставить или обновить строки по первичному ключу `code`.
 
-        Обновление выполняется, только если новая ревизия строго свежее
-        сохранённой. Записи без ревизии не перетирают запись с известной
-        ревизией: `NULL` в сравнении даёт `NULL`, поэтому условие приходится
-        писать явно.
+        Батч режется на куски по числу **аргументов**, а не строк: asyncpg
+        ограничивает их 32 767 (предел int16 в протоколе Postgres), и при
+        42 колонках `products` батч из 1000 строк даёт 42 000 аргументов и
+        падает с InterfaceError. Размер куска считается от числа колонок,
+        поэтому добавление новой колонки не сломает заливку молча.
         """
+        columns = len(model.__table__.columns)
+        chunk_size = max(_MAX_QUERY_ARGS // columns, 1)
+
+        affected = 0
+        for start in range(0, len(rows), chunk_size):
+            affected += await self._upsert_chunk(model, rows[start : start + chunk_size])
+        return affected
+
+    async def _upsert_chunk(self, model: type[ProductRaw] | type[Product], rows: list[dict]) -> int:
         statement = insert(model).values(rows)
         updatable = {
             column.name: statement.excluded[column.name]

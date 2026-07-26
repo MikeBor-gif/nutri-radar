@@ -169,11 +169,18 @@ class ParquetSource:
         params: list[Any],
         *,
         limit: int | None = None,
+        skipped_counter: list[int] | None = None,
     ) -> Iterator[list[RawProduct]]:
         """Отдавать продукты батчами.
 
         Итератор, а не список: в дампе 4,63 млн строк, и материализовать их
         целиком нельзя даже после фильтрации.
+
+        Args:
+            skipped_counter: изменяемый счётчик отбраковки. Через него число
+                непрошедших валидацию записей доходит до `runs`. Без него оно
+                осталось бы только в логах, а доля пропусков — обязательная
+                метрика проекта и должна читаться из БД.
 
         Yields:
             Батчи `RawProduct` размером `IngestSettings.batch_size`.
@@ -202,6 +209,9 @@ class ParquetSource:
 
             if batch:
                 yield batch
+
+        if skipped_counter is not None:
+            skipped_counter.append(skipped)
 
         if skipped:
             # Счётчик итоговый, а не по записи: на корпусе в сотни тысяч строк

@@ -168,15 +168,21 @@ async def load_corpus(
                     await _write_batch(settings, batch, ingest, dump_version)
                     result.processed += len(batch)
                 except DatabaseError:
-                    # Битый батч не роняет прогон целиком: помечаем, считаем,
-                    # идём дальше. Иначе одна плохая строка обнуляет часы работы.
-                    result.skipped += len(batch)
-                    result.failed_batches.append(index)
-                    logger.error(
-                        "Батч не записан, продолжаем",
+                    # Батч не записался целиком. Не списываем тысячу строк
+                    # из-за одной плохой: перезаписываем поштучно и теряем
+                    # ровно проблемные. На реальном дампе 8 плохих значений
+                    # стоили бы 3000 строк без этого отката.
+                    logger.warning(
+                        "Батч не записан, перезаписываем поштучно",
                         extra={"batch": index, "size": len(batch)},
                         exc_info=True,
                     )
+                    written, dropped = await _write_batch_row_by_row(
+                        settings, batch, ingest, dump_version
+                    )
+                    result.processed += written
+                    result.skipped += dropped
+                    result.failed_batches.append(index)
 
             if index % 10 == 0:
                 elapsed = time.perf_counter() - started
@@ -258,6 +264,11 @@ async def load_deltas(
         watermark = max(watermark or 0, manual)
         logger.info("Окно задано вручную", extra={"days": days, "watermark": watermark})
 
+    run_id: int | None = None
+    run_params: dict[str, object] = {"mode": "delta", "watermark_before": watermark}
+    applied_watermark = watermark
+    error: str | None = None
+
     try:
         index = fetch_index(client, ingest)
         check_retention_gap(index, watermark)
@@ -268,15 +279,9 @@ async def load_deltas(
             result.elapsed_s = round(time.perf_counter() - started, 2)
             return result
 
-        run_params: dict[str, object] = {
-            "mode": "delta",
-            "files": len(selected),
-            "watermark_before": watermark,
-        }
+        run_params["files"] = len(selected)
         run_id = None if dry_run else await _open_run(settings, run_params)
         result.run_id = run_id
-
-        applied_watermark = watermark
         for file in selected:
             try:
                 path = download_delta(client, file, ingest)
@@ -285,7 +290,7 @@ async def load_deltas(
                 # дальше него двигать нельзя: между ними образуется дыра.
                 logger.warning(
                     "Файл дельты не скачан, дальше не идём",
-                    extra={"name": file.name, "error": type(exc).__name__},
+                    extra={"file_name": file.name, "error": type(exc).__name__},
                 )
                 break
 
@@ -304,11 +309,18 @@ async def load_deltas(
                 },
             )
 
+    except Exception as exc:
+        error = f"{type(exc).__name__}: {exc}"
+        logger.error("Применение дельт прервано", exc_info=True)
+        raise
+    finally:
         result.elapsed_s = round(time.perf_counter() - started, 2)
+        # Прогон закрывается и при отказе. Без этого упавший запуск навсегда
+        # остаётся в статусе running, и предупреждение о «незавершённых
+        # прогонах» начинает срабатывать на каждом следующем запуске.
         if run_id is not None:
             run_params["watermark"] = applied_watermark
-            await _close_run(settings, run_id, result, params=run_params)
-    finally:
+            await _close_run(settings, run_id, result, error=error, params=run_params)
         if owns_client:
             client.close()
 
@@ -409,6 +421,37 @@ async def _write_batch(
             min_ingredients_length=ingest.min_ingredients_length,
             dump_version=dump_version,
         )
+
+
+async def _write_batch_row_by_row(
+    settings: Settings,
+    batch: list[RawProduct],
+    ingest: IngestSettings,
+    dump_version: str | None,
+) -> tuple[int, int]:
+    """Записать батч по одной строке, изолируя проблемные.
+
+    Медленно, поэтому применяется только после отказа батча целиком.
+    Возвращает (записано, отброшено).
+    """
+    written = 0
+    dropped = 0
+    for product in batch:
+        try:
+            await _write_batch(settings, [product], ingest, dump_version)
+            written += 1
+        except DatabaseError:
+            dropped += 1
+            logger.error(
+                "Запись отброшена",
+                extra={"code": product.code},
+                exc_info=True,
+            )
+    logger.info(
+        "Поштучная перезапись завершена",
+        extra={"written": written, "dropped": dropped},
+    )
+    return written, dropped
 
 
 def _log_result(result: LoadResult, ingest: IngestSettings, *, dry_run: bool) -> None:

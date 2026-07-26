@@ -299,6 +299,44 @@ class TestRunJournal:
         assert await count_rows(load_settings, "runs") == 0
 
 
+class TestLargeBatch:
+    """Батч боевого размера. На маленьких этот класс ошибок не проявляется.
+
+    asyncpg ограничивает число аргументов запроса 32 767 (int16 в протоколе
+    Postgres). У `products` больше сорока колонок, поэтому батч из 1000 строк
+    даёт свыше 42 000 аргументов и падает. Тесты с батчем по 2 и по 200 строк
+    этого не ловили — ошибка вылезла только на настоящем прогоне.
+    """
+
+    async def test_батч_боевого_размера_записывается(
+        self, load_settings, migrated_database, _clean_engine
+    ):
+        products = [
+            make_product(f"8{index:012d}", rev=1, name=f"Товар {index}") for index in range(1000)
+        ]
+
+        async with get_session(load_settings.db) as session:
+            await ProductRepository(session).upsert_batch(
+                products,
+                languages=load_settings.ingest.languages,
+                min_ingredients_length=load_settings.ingest.min_ingredients_length,
+                dump_version="тест",
+            )
+
+        assert await count_rows(load_settings, "products") == 1000
+
+    async def test_размер_куска_считается_от_числа_колонок(self):
+        """Константа-подбор сломалась бы при добавлении колонки."""
+        from nutri_radar.db.models.product import Product
+        from nutri_radar.db.repositories.product import _MAX_QUERY_ARGS
+
+        columns = len(Product.__table__.columns)
+        chunk = _MAX_QUERY_ARGS // columns
+
+        assert chunk * columns <= _MAX_QUERY_ARGS
+        assert chunk >= 1
+
+
 class TestBatchPerformance:
     """Ловит переход на построчные запросы вместо батчевых.
 

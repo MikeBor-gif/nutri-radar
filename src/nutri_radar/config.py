@@ -165,23 +165,29 @@ class IngestSettings(BaseSettings):
     data_dir: Path = Path("data")
 
     languages: list[str] = Field(default_factory=lambda: ["en", "ru", "de", "fr", "pl"])
+    # Только КОНКРЕТНЫЕ теги, без зонтичных `en:snacks`, `en:beverages`,
+    # `en:dairies`, `en:breakfasts`. Таксономия OFF иерархическая: правильно
+    # категоризованный продукт несёт и подтег, и зонтичный. Поэтому отказ от
+    # зонтичных убирает не категории, а плохо категоризованные записи —
+    # те, у которых есть только верхний уровень (ADR-014).
     category_tags: list[str] = Field(
         default_factory=lambda: [
-            "en:snacks",
             "en:sweet-snacks",
             "en:salty-snacks",
             "en:biscuits-and-cakes",
             "en:chocolates",
             "en:confectioneries",
-            "en:beverages",
             "en:sweetened-beverages",
-            "en:dairies",
             "en:yogurts",
             "en:cheeses",
-            "en:breakfasts",
             "en:breakfast-cereals",
         ]
     )
+
+    # Требовать, чтобы продукт хоть раз сканировали в приложении. Отсекает
+    # заброшенные тестовые записи. Вносит смещение в сторону популярных
+    # продуктов — это указано в README и ADR-014.
+    require_scanned: bool = True
 
     # Составы короче этого не несут информации: "-", "n/a", пустые скобки.
     min_ingredients_length: int = 10
