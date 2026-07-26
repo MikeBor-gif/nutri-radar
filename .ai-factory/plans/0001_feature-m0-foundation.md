@@ -90,16 +90,16 @@
 
 ### Фаза 3: инфраструктура данных
 
-- [ ] **Задача 4:** `docker-compose.yml` с `pgvector/pgvector:pg16` (healthcheck
+- [x] **Задача 4:** `docker-compose.yml` с `pgvector/pgvector:pg16` (healthcheck
       через `pg_isready`), сервис `app` с `depends_on: service_healthy`,
       многостадийный `Dockerfile`, `.dockerignore`. Langfuse — только заготовка
       в профиле `tracing`, выключенном по умолчанию. *(зависит от 3)*
       Файлы: `docker-compose.yml`, `Dockerfile`, `.dockerignore`
-- [ ] **Задача 5:** Слой `db` — `DeclarativeBase` с `naming_convention`,
+- [x] **Задача 5:** Слой `db` — `DeclarativeBase` с `naming_convention`,
       async-движок, `async_sessionmaker(expire_on_commit=False)`,
       контекстный менеджер сессии. Репозиториев пока нет. *(зависит от 3)*
       Файлы: `src/nutri_radar/db/{__init__,base,session}.py`
-- [ ] **Задача 6:** Alembic по async-шаблону + первая миграция руками:
+- [x] **Задача 6:** Alembic по async-шаблону + первая миграция руками:
       `CREATE EXTENSION vector` и таблица `runs` (журнал прогонов всех стадий)
       с индексом по `(stage, started_at DESC)`. DSN берётся из конфига, не из
       `alembic.ini`. `downgrade` реализован полностью. *(зависит от 4, 5)*

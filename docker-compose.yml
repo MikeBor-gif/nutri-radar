@@ -1,0 +1,75 @@
+# Базовый стек Nutri Radar: Postgres с pgvector и приложение.
+#
+# Langfuse НЕ входит в базовый стек (ADR-007): это шесть сервисов и 16 ГиБ
+# по рекомендации вендора. Он живёт в профиле tracing и включается на M6:
+#   docker compose --profile tracing up -d
+#
+# Переменные берутся из .env — того же файла, что читает приложение.
+# Отдельных POSTGRES_* переменных нет: источник истины для доступа к БД один.
+
+services:
+  db:
+    # Готовый образ с расширением vector. Собирать своё не нужно, а в CI
+    # обязателен именно он: на postgres:16 миграция с CREATE EXTENSION упадёт.
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${DB__USER:-nutri}
+      POSTGRES_PASSWORD: ${DB__PASSWORD:-nutri}
+      POSTGRES_DB: ${DB__NAME:-nutri_radar}
+      # Ускоряет первичную инициализацию, на данные не влияет
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8"
+    ports:
+      - "${DB__PORT:-5432}:5432"
+    volumes:
+      # Именованный том, не bind-mount: на Windows bind-mount для данных
+      # Postgres даёт проблемы с правами и производительностью.
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # Без healthcheck сервис app стартует раньше готовности БД и падает
+      # на первом же подключении.
+      test: ["CMD-SHELL", "pg_isready -U ${DB__USER:-nutri} -d ${DB__NAME:-nutri_radar}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # Внутри compose-сети база доступна по имени сервиса, не по localhost
+      DB__HOST: db
+      DB__PORT: 5432
+      DB__USER: ${DB__USER:-nutri}
+      DB__PASSWORD: ${DB__PASSWORD:-nutri}
+      DB__NAME: ${DB__NAME:-nutri_radar}
+      # Ollama работает на хосте, а не в контейнере: ей нужен прямой доступ
+      # к GPU, а прокидывать CUDA в контейнер на Windows избыточно.
+      OLLAMA__BASE_URL: ${OLLAMA__BASE_URL:-http://host.docker.internal:11434}
+      ANTHROPIC__API_KEY: ${ANTHROPIC__API_KEY:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      ENVIRONMENT: ${ENVIRONMENT:-local}
+      # В контейнере логи парсят машины, а не человек
+      JSON_LOGS: "true"
+    volumes:
+      # Дамп ~10 ГБ внутрь образа не кладём
+      - ./data:/app/data
+      - ./reports:/app/reports
+    extra_hosts:
+      # Доступ к Ollama на хосте из Linux-контейнера
+      - "host.docker.internal:host-gateway"
+    command: ["health"]
+
+  # ---------------------------------------------------------------------------
+  # Профиль tracing — Langfuse. Выключен по умолчанию, подключается на M6.
+  # Полный стек Langfuse: web, worker, свой Postgres, ClickHouse, Redis, MinIO.
+  # Заготовка намеренно не заполнена: конфигурация появится вместе с
+  # трассировкой агента, чтобы не тащить шесть неиспользуемых сервисов.
+  # ---------------------------------------------------------------------------
+
+volumes:
+  pgdata:

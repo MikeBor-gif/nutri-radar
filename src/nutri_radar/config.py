@@ -44,7 +44,10 @@ class DatabaseSettings(BaseSettings):
     host: str = "localhost"
     port: int = 5432
     user: str = "nutri"
-    password: SecretStr = SecretStr("nutri")
+    # Пароль намеренно не является подстрокой имени пользователя или БД:
+    # фильтр логирования вычищает значение секрета из любого текста, и пароль
+    # "nutri" затирал бы также user и name в сообщениях (см. logging.py).
+    password: SecretStr = SecretStr("local_dev_password")
     name: str = "nutri_radar"
     pool_size: int = 5
     # SQL-эхо отдельным флагом, а не через LOG_LEVEL: на DEBUG оно забивает

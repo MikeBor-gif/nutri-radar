@@ -1,0 +1,44 @@
+# Дамп ~10 ГБ — монтируется томом, в образ не попадает
+data/
+reports/
+
+# Окружения и кэши
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Git и инструментарий агентов — в рантайме не нужны
+.git/
+.gitignore
+.gitattributes
+.github/
+.claude/
+.ai-factory/
+.ai-factory.json
+.mcp.json
+skills-lock.json
+
+# Документация проекта: в образе не нужна, кроме README (его требует hatchling)
+AGENTS.md
+CLAUDE.md
+DECISIONS.md
+PROJECT_BRIEF_FOOD.md
+
+# Тесты и разведка
+tests/
+notebooks/
+
+# Секреты — в образ не попадают ни при каких условиях
+.env
+.env.*
+!.env.example
+
+# Локальные БД DuckDB
+*.duckdb
+*.duckdb.wal

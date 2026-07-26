@@ -48,7 +48,9 @@ def main(
     settings = get_settings()
     setup_logging(
         level=log_level or settings.app.log_level,
-        json_output=json_logs,
+        # Флаг только включает JSON, но не выключает: в контейнере режим задаёт
+        # переменная JSON_LOGS, и флага в команде там нет.
+        json_output=json_logs or settings.app.json_logs,
         secrets=settings.secret_values(),
     )
     logger.debug(
