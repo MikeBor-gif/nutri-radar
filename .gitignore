@@ -1,8 +1,13 @@
 # Данные: дамп OFF ~10 ГБ, в репозиторий не попадает.
 # Исключение — эталонная разметка evals, она создаётся руками и ценна.
-data/
-!data/evals/
-!data/evals/gold.jsonl
+#
+# Ведущий слэш обязателен. Без него шаблон `data/` совпадает с ЛЮБЫМ каталогом
+# с таким именем на любой глубине — в том числе с `tests/data/`, где лежит
+# генератор фикстур. Из-за этого он не попадал в репозиторий: локально тесты
+# проходили, а в CI падали с ModuleNotFoundError.
+/data/
+!/data/evals/
+!/data/evals/gold.jsonl
 
 # Секреты. В репозиторий идёт только .env.example
 .env
@@ -32,12 +37,18 @@ htmlcov/
 
 # Отчёты: графики пересобираются командой, в репозиторий не коммитим.
 # Исключение — зафиксированный baseline метрик для гейта в CI (ADR-008).
-reports/
-!reports/baseline/
-!reports/baseline/**
+# Ведущий слэш — по той же причине, что и у /data/.
+/reports/
+!/reports/baseline/
+!/reports/baseline/**
 
 # IDE и ОС
 .idea/
 .vscode/
 Thumbs.db
 desktop.ini
+
+# Сами фикстуры генерируются кодом (tests/data/make_fixtures.py) и в
+# репозиторий не попадают — в нём живёт только генератор.
+tests/data/*.parquet
+tests/data/*.jsonl.gz
