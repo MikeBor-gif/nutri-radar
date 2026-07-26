@@ -41,9 +41,19 @@ WHERE len(list_filter(
       )) > 0
 ```
 
-⚠️ Проверить на реальном файле до написания финального фильтра: содержит ли
-список служебную запись `lang = 'main'`, дублирующую главный язык продукта.
-Если да — исключать её, иначе языковая статистика удвоится.
+✅ **Проверено на реальном дампе 2026-07-26** (`nutri-radar ingest probe`,
+выборка 20 000 строк): служебная запись `lang = 'main'` **присутствует** —
+19 180 записей на 20 000 строк, то есть почти у каждого продукта. Она дублирует
+текст главного языка: `en` встретился 37 638 раз при 20 000 строках.
+
+**Следствие: `main` обязательно исключать** из подсчёта языков и из
+дедупликации, иначе языковая статистика удвоится. Константа
+`MAIN_LANG_MARKER` в `src/nutri_radar/ingest/probe.py`.
+
+```sql
+-- правильно: считаем только настоящие языки
+list_filter(ingredients_text, x -> x.lang <> 'main' AND x.lang IN ('en','ru','de','fr','pl'))
+```
 
 ### 2. Нутриенты — `LIST<STRUCT(name, value, "100g", serving, unit, prepared_*)>`
 
@@ -72,21 +82,42 @@ SELECT code,
 FROM read_parquet('data/food.parquet');
 ```
 
-⚠️ Проверить на реальном файле: точный набор значений `name`
-(`energy-kcal` против `energy`, присутствие `salt` и `sodium` одновременно,
-реальное покрытие `fruits-vegetables-nuts-estimate-from-ingredients`).
-Запрос для проверки:
+✅ **Проверено на реальном дампе 2026-07-26** (`nutri-radar ingest probe`,
+выборка 20 000 строк). Покрытие — доля строк, где нутриент есть со значением
+на 100 г:
 
-```sql
-WITH sample AS (
-  FROM read_parquet('data/food.parquet') SELECT nutriments LIMIT 100000
-)
-SELECT u.name, count() AS n
-FROM sample, UNNEST(nutriments) AS t(u)
-GROUP BY ALL
-ORDER BY n DESC
-LIMIT 40;
-```
+| `name` | покрытие | комментарий |
+|---|---|---|
+| `energy` | 94.1% | есть **одновременно** с `energy-kcal` |
+| `energy-kcal` | 94.1% | **берём это** — единицы однозначны |
+| `fat` | 94.0% | |
+| `carbohydrates` | 93.9% | |
+| `proteins` | 93.9% | |
+| `salt` | 93.0% | есть **одновременно** с `sodium`, покрытие идентичное |
+| `sodium` | 93.0% | производное от `salt` (×2.5), брать одно из двух |
+| `sugars` | 89.5% | |
+| `saturated-fat` | 82.0% | |
+| **`fruits-vegetables-nuts-estimate-from-ingredients`** | **83.7%** | входит в формулу Nutri-Score (ADR-005) |
+| `fruits-vegetables-legumes-estimate-from-ingredients` | 83.7% | вариант формулы 2023 года |
+| `fiber` | 76.2% | |
+| `nutrition-score-fr` | 73.7% | **сырые баллы** Nutri-Score, из которых считается буква |
+| `nova-group` | 92.2% | дублирует колонку `nova_group` верхнего уровня |
+| `energy-kj` | 14.3% | редкий, не использовать |
+| `added-sugars` | 15.4% | заманчиво для темы сахара, но покрытие низкое |
+
+**Три вывода, влияющих на решения:**
+
+1. Покрытие `fruits-vegetables-nuts-estimate-from-ingredients` — **83,7%**,
+   а не «часто пустой», как предполагалось в ADR-005. Sanity-check M4 имеет
+   достаточно данных; долю исключённых строк всё равно указать в отчёте.
+2. Есть нутриент **`nutrition-score-fr`** — сырые баллы Nutri-Score. Это прямой
+   вход формулы, а не производная от буквы. Для sanity-check это сильнее, чем
+   предсказывать букву: можно проверить и регрессию на баллы.
+3. `added-sugars` покрыт лишь на 15% — использовать его как признак «скрытого
+   сахара» нельзя, и это дополнительный аргумент в пользу нашей производной
+   фичи «число разных форм сахара» из текста состава.
+
+Повторить проверку: `nutri-radar ingest probe --local`
 
 ### 3. Теги — `LIST<VARCHAR>` с языковым префиксом
 
@@ -113,7 +144,7 @@ WHERE list_has_any(categories_tags, ['en:snacks', 'en:beverages', 'en:dairies'])
 | `created_t` | INT64 | когда продукт добавлен |
 | `obsolete` | BOOL | снятые с производства — **исключаем из корпуса** |
 | `completeness` | FLOAT32 | полнота записи 0..1, порог качества |
-| `schema_version` | INT32 | версия схемы дампа; страховка от молчаливой смены формата |
+| `schema_version` | INT32 | версия схемы записи. ⚠️ В дампе **пять разных значений**: `999, 1001, 1002, 1003, 1004` — состав заполненных полей у записей различается, отсутствие поля не всегда означает отсутствие данных |
 
 ### Тексты — ядро проекта (4)
 
@@ -237,9 +268,12 @@ WITH src AS (
   WHERE NOT obsolete
     AND NOT coalesce(no_nutrition_data, false)      -- только для аналитического корпуса
     AND len(coalesce(data_quality_errors_tags, [])) = 0
+    -- x.lang <> 'main' обязательно: служебная запись дублирует главный язык
+    -- (подтверждено разведкой: 19 180 записей 'main' на 20 000 строк)
     AND len(list_filter(
           ingredients_text,
-          x -> x.lang IN ('en','ru','de','fr','pl')
+          x -> x.lang <> 'main'
+               AND x.lang IN ('en','ru','de','fr','pl')
                AND x.text IS NOT NULL
                AND length(trim(x.text)) >= 10
         )) > 0

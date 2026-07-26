@@ -16,6 +16,7 @@ import typer
 
 from nutri_radar import __version__
 from nutri_radar.health import CheckStatus, run_health_check
+from nutri_radar.ingest import cli as ingest_cli
 from nutri_radar.logging import setup_logging
 
 logger = logging.getLogger(__name__)
@@ -26,6 +27,9 @@ app = typer.Typer(
     no_args_is_help=True,
     add_completion=False,
 )
+
+# Слайсы пайплайна подключаются здесь по мере появления.
+app.add_typer(ingest_cli.app, name="ingest")
 
 
 @app.callback()

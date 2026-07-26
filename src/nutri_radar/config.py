@@ -187,6 +187,19 @@ class IngestSettings(BaseSettings):
     min_ingredients_length: int = 10
     batch_size: int = 1000
 
+    # Размер выборки для `ingest probe`. Удалённое чтение 20 тыс. строк занимает
+    # около 200 с: DuckDB делает много мелких range-запросов. Больше не нужно —
+    # состав нутриентов и языков на этом объёме уже стабилен.
+    probe_sample_rows: int = 20000
+
+    # Без лимита DuckDB на файле 7,7 ГБ может съесть всю память и быть убитым ОС.
+    duckdb_memory_limit: str = "4GB"
+
+    # Скачивание дампа. Файл 7,7 ГБ, поэтому докачка и ретраи обязательны.
+    download_chunk_size: int = 8 * 1024 * 1024
+    download_max_retries: int = 5
+    download_timeout_s: float = 300.0
+
     @field_validator("languages")
     @classmethod
     def _validate_languages(cls, value: list[str]) -> list[str]:
