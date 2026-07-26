@@ -69,10 +69,10 @@
 
 ### Фаза 1: каркас проекта
 
-- [ ] **Задача 1:** Настроить `pyproject.toml` и окружение uv — src-layout, Python 3.12,
+- [x] **Задача 1:** Настроить `pyproject.toml` и окружение uv — src-layout, Python 3.12,
       зависимости M0, настройки ruff / pytest / mypy, точка входа CLI.
       Файлы: `pyproject.toml`, `.python-version`
-- [ ] **Задача 2:** Скелет пакета — `errors.py` (корневой `NutriRadarError`),
+- [x] **Задача 2:** Скелет пакета — `errors.py` (корневой `NutriRadarError`),
       `logging.py` (`setup_logging`, уровень из конфига), `tracing.py`
       (`Protocol Tracer` + `NoOpTracer`), корень Typer-CLI. Слайсы не создаём —
       они приходят со своими майлстоунами. *(зависит от 1)*
@@ -80,7 +80,7 @@
 
 ### Фаза 2: конфигурация
 
-- [ ] **Задача 3:** `config.py` на pydantic-settings и `.env.example` — вложенные
+- [x] **Задача 3:** `config.py` на pydantic-settings и `.env.example` — вложенные
       настройки (App, Database, Ollama, Anthropic, Ingest, LLM), `SecretStr` для
       секретов, `num_ctx=8192` как параметр, а не литерал, валидаторы,
       `ConfigurationError` вместо протечки pydantic. *(зависит от 2)*

@@ -1,0 +1,108 @@
+[project]
+name = "nutri-radar"
+version = "0.1.0"
+description = "Разбор состава пищевых продуктов: нормализация ингредиентов, скрытые формы сахара, оценка качества по тексту состава"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+
+# Зависимости M0. Остальное добавляется своим майлстоуном — правило 7 брифа
+# (никаких зависимостей без согласования).
+#
+# Логирование намеренно НЕ имеет зависимости: структурный вывод собран на
+# стандартном logging плюс ~40 строк форматтера. Обоснование — ADR-010.
+dependencies = [
+    "pydantic>=2.9",
+    "pydantic-settings>=2.5",
+    "sqlalchemy[asyncio]>=2.0.36",
+    "asyncpg>=0.30",
+    "alembic>=1.14",
+    "httpx>=0.28",
+    "typer>=0.15",
+]
+
+[project.scripts]
+nutri-radar = "nutri_radar.cli:app"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.25",
+    "ruff>=0.9",
+    "mypy>=1.14",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/nutri_radar"]
+
+# =============================================================================
+# ruff
+# =============================================================================
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+# .claude/ — вендоренный инструментарий AI Factory, не наш код и не наш стиль.
+# alembic/versions — автогенерируемые файлы с шаблонным форматированием.
+extend-exclude = [".claude", "notebooks", "alembic/versions", "*.md"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle
+    "F",    # pyflakes
+    "I",    # isort
+    "N",    # pep8-naming
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "SIM",  # flake8-simplify
+    "RUF",  # ruff-specific
+]
+ignore = [
+    # RUF001-003 ищут кириллические гомоглифы в коде — защита от подмены
+    # латиницы на похожие символы. В проекте комментарии и докстринги на
+    # русском осознанно, поэтому правило срабатывает на каждой букве «а» и «о».
+    # Отключаем именно эти три, а не всю группу RUF.
+    "RUF001",
+    "RUF002",
+    "RUF003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# В тестах допустимы длинные имена и assert без сообщения
+"tests/**" = ["B011"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["nutri_radar"]
+
+# =============================================================================
+# pytest
+# =============================================================================
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+# Интеграционные тесты требуют поднятого Postgres и по умолчанию НЕ отбираются:
+# DoD майлстоуна требует зелёный pytest на чистой машине без докера.
+# Запуск интеграционных: uv run pytest -m integration
+addopts = "-v --tb=short --strict-markers -m 'not integration'"
+markers = [
+    "integration: требует поднятого Postgres (docker compose up -d db)",
+]
+filterwarnings = ["error"]
+
+# =============================================================================
+# mypy — нестрого, но без нетипизированных определений в src
+# =============================================================================
+[tool.mypy]
+python_version = "3.12"
+strict = false
+disallow_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+disallow_untyped_defs = false

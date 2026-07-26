@@ -1,0 +1,252 @@
+"""Конфигурация проекта. Единственный источник параметров.
+
+Правило 5 брифа: ни одной магической константы в коде. Порог, размер батча,
+имя модели, размер контекста, лимиты — всё здесь и переопределяется через `.env`.
+
+Вложенные группы читаются с префиксами: `DB__HOST`, `OLLAMA__NUM_CTX` и так далее
+(разделитель — двойное подчёркивание). Плоские ключи приложения — без префикса:
+`LOG_LEVEL`, `ENVIRONMENT`.
+"""
+
+from __future__ import annotations
+
+from functools import lru_cache
+from pathlib import Path
+from typing import Literal
+
+from pydantic import Field, SecretStr, ValidationError, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from nutri_radar.errors import ConfigurationError
+
+LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+Environment = Literal["local", "ci", "production"]
+LLMProvider = Literal["ollama", "anthropic"]
+
+_ENV_FILE = ".env"
+
+
+class AppSettings(BaseSettings):
+    """Общие параметры приложения."""
+
+    model_config = SettingsConfigDict(env_file=_ENV_FILE, extra="ignore")
+
+    log_level: LogLevel = "DEBUG"
+    environment: Environment = "local"
+    json_logs: bool = False
+
+
+class DatabaseSettings(BaseSettings):
+    """Подключение к Postgres."""
+
+    model_config = SettingsConfigDict(env_prefix="DB__", env_file=_ENV_FILE, extra="ignore")
+
+    host: str = "localhost"
+    port: int = 5432
+    user: str = "nutri"
+    password: SecretStr = SecretStr("nutri")
+    name: str = "nutri_radar"
+    pool_size: int = 5
+    # SQL-эхо отдельным флагом, а не через LOG_LEVEL: на DEBUG оно забивает
+    # вывод целиком и отладка самого пайплайна становится невозможной.
+    echo_sql: bool = False
+
+    @property
+    def dsn(self) -> str:
+        """DSN для asyncpg. Содержит пароль — в логи не передаётся."""
+        password = self.password.get_secret_value()
+        return f"postgresql+asyncpg://{self.user}:{password}@{self.host}:{self.port}/{self.name}"
+
+    @property
+    def safe_dsn(self) -> str:
+        """DSN без пароля — для логов и сообщений об ошибках."""
+        return f"postgresql+asyncpg://{self.user}:***@{self.host}:{self.port}/{self.name}"
+
+
+class OllamaSettings(BaseSettings):
+    """Локальные модели через Ollama.
+
+    Ограничение железа: RTX 3060 Laptop, 6 ГБ VRAM. Отсюда модель 3B в q4
+    и последовательная загрузка моделей вместо параллельной.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="OLLAMA__", env_file=_ENV_FILE, extra="ignore")
+
+    base_url: str = "http://localhost:11434"
+    model: str = "qwen2.5:3b-instruct-q4_K_M"
+    embedding_model: str = "bge-m3"
+    embedding_dim: int = 1024
+
+    # Критичный параметр. Дефолт Ollama — 4096, и он подбирается динамически
+    # по доступной VRAM, то есть МОЛЧА обрезает вход. Задаём явно.
+    num_ctx: int = 8192
+
+    temperature: float = 0.0
+    max_output_tokens: int = 2048
+    # Модели грузятся по очереди: 6 ГБ VRAM не переживут одновременную
+    # загрузку модели извлечения и модели эмбеддингов.
+    keep_alive: str = "5m"
+    timeout_s: float = 120.0
+    # Неограниченный веер запросов положит GPU. Параллелизм — из конфига.
+    max_concurrency: int = 2
+
+    @field_validator("num_ctx")
+    @classmethod
+    def _validate_num_ctx(cls, value: int) -> int:
+        if value < 2048:
+            raise ValueError(
+                f"num_ctx={value} слишком мал: составы с длинными списками "
+                "ингредиентов будут обрезаны. Минимум 2048."
+            )
+        return value
+
+    @field_validator("max_concurrency")
+    @classmethod
+    def _validate_max_concurrency(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError(f"max_concurrency={value} должен быть >= 1")
+        return value
+
+
+class AnthropicSettings(BaseSettings):
+    """Облачная модель: агент (M6) и эталон в evals (M3).
+
+    На M0 ключ не обязателен — health-check сообщит о его отсутствии как WARN.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="ANTHROPIC__", env_file=_ENV_FILE, extra="ignore")
+
+    api_key: SecretStr | None = None
+    model: str = "claude-sonnet-5"
+    # Дешёвая модель для массовых прогонов вроде zero-shot в M4.
+    cheap_model: str = "claude-haiku-4-5-20251001"
+    max_output_tokens: int = 2048
+    timeout_s: float = 60.0
+
+    @property
+    def is_configured(self) -> bool:
+        return self.api_key is not None
+
+
+class IngestSettings(BaseSettings):
+    """Параметры сбора корпуса из дампа Open Food Facts.
+
+    Языки и категории зафиксированы в ADR-002. Целевые размеры корпусов —
+    в DESCRIPTION.md; точные числа уточняются по факту первого прогона.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="INGEST__", env_file=_ENV_FILE, extra="ignore")
+
+    # Parquet-дамп лежит только на HuggingFace: на static.openfoodfacts.org
+    # его нет (см. RESEARCH.md, раздел 1).
+    dump_url: str = (
+        "https://huggingface.co/datasets/openfoodfacts/product-database/resolve/main/food.parquet"
+    )
+    delta_index_url: str = "https://static.openfoodfacts.org/data/delta/index.txt"
+    data_dir: Path = Path("data")
+
+    languages: list[str] = Field(default_factory=lambda: ["en", "ru", "de", "fr", "pl"])
+    category_tags: list[str] = Field(
+        default_factory=lambda: [
+            "en:snacks",
+            "en:sweet-snacks",
+            "en:salty-snacks",
+            "en:biscuits-and-cakes",
+            "en:chocolates",
+            "en:confectioneries",
+            "en:beverages",
+            "en:sweetened-beverages",
+            "en:dairies",
+            "en:yogurts",
+            "en:cheeses",
+            "en:breakfasts",
+            "en:breakfast-cereals",
+        ]
+    )
+
+    # Составы короче этого не несут информации: "-", "n/a", пустые скобки.
+    min_ingredients_length: int = 10
+    batch_size: int = 1000
+
+    @field_validator("languages")
+    @classmethod
+    def _validate_languages(cls, value: list[str]) -> list[str]:
+        if not value:
+            raise ValueError("languages пуст: без языков фильтр выборки отберёт нулевой корпус")
+        return value
+
+    @property
+    def dump_path(self) -> Path:
+        return self.data_dir / "food.parquet"
+
+
+class LLMSettings(BaseSettings):
+    """Выбор провайдера. По нему composition root подставляет адаптер."""
+
+    model_config = SettingsConfigDict(env_prefix="LLM__", env_file=_ENV_FILE, extra="ignore")
+
+    provider: LLMProvider = "ollama"
+
+
+class Settings(BaseSettings):
+    """Корневые настройки. Получать только через `get_settings()`."""
+
+    model_config = SettingsConfigDict(env_file=_ENV_FILE, extra="ignore")
+
+    app: AppSettings = Field(default_factory=AppSettings)
+    db: DatabaseSettings = Field(default_factory=DatabaseSettings)
+    ollama: OllamaSettings = Field(default_factory=OllamaSettings)
+    anthropic: AnthropicSettings = Field(default_factory=AnthropicSettings)
+    ingest: IngestSettings = Field(default_factory=IngestSettings)
+    llm: LLMSettings = Field(default_factory=LLMSettings)
+
+    def secret_values(self) -> frozenset[str]:
+        """Значения, которые фильтр логирования должен вычищать.
+
+        Собирается здесь, а не в logging.py: конфиг знает, что является
+        секретом, а логирование не должно этого угадывать.
+        """
+        values = {self.db.password.get_secret_value()}
+        if self.anthropic.api_key is not None:
+            values.add(self.anthropic.api_key.get_secret_value())
+        return frozenset(v for v in values if v)
+
+    def describe(self) -> dict[str, object]:
+        """Безопасный для логов снимок настроек. Секретов не содержит."""
+        return {
+            "environment": self.app.environment,
+            "log_level": self.app.log_level,
+            "db": self.db.safe_dsn,
+            "db_pool_size": self.db.pool_size,
+            "llm_provider": self.llm.provider,
+            "ollama_model": self.ollama.model,
+            "ollama_num_ctx": self.ollama.num_ctx,
+            "ollama_max_concurrency": self.ollama.max_concurrency,
+            "embedding_model": self.ollama.embedding_model,
+            "anthropic_key": "задан" if self.anthropic.is_configured else "не задан",
+            "anthropic_model": self.anthropic.model,
+            "ingest_languages": self.ingest.languages,
+            "ingest_categories_count": len(self.ingest.category_tags),
+            "ingest_batch_size": self.ingest.batch_size,
+        }
+
+
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    """Собрать настройки один раз на процесс.
+
+    Ошибку валидации превращаем в `ConfigurationError`: наружу не должен
+    протекать `ValidationError` pydantic с его многострочным форматом —
+    вызывающему нужно понять, какой ключ поправить в `.env`.
+    """
+    try:
+        return Settings()
+    except ValidationError as exc:
+        problems = "; ".join(
+            f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}"
+            for error in exc.errors()
+        )
+        raise ConfigurationError(
+            f"Конфигурация невалидна ({problems}). "
+            f"Проверьте {_ENV_FILE} — эталонный список ключей в .env.example."
+        ) from exc
