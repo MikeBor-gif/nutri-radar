@@ -162,6 +162,32 @@ class ExtractionRepository:
         )
         return found
 
+    async def iter_ingredients(
+        self,
+        *,
+        model_name: str | None = None,
+        prompt_version: str | None = None,
+    ) -> list[tuple[list[dict[str, Any]], str | None]]:
+        """Списки ингредиентов из сохранённых извлечений и язык состава.
+
+        Нужны отчёту `extract dict unknown`: он показывает, какие имена
+        словарь не закрывает, и тем самым говорит, куда его пополнять.
+        Читается целиком — корпус в тысячах строк, а не в миллионах.
+
+        Возвращается сырой JSONB, а не Pydantic-модель ингредиента: разбор
+        и канонизация — дело слайса `extract`, а не слоя доступа к данным.
+        """
+        statement = select(ProductExtraction.ingredients, ProductExtraction.source_lang).where(
+            ProductExtraction.unreadable.is_(False)
+        )
+        if model_name is not None:
+            statement = statement.where(ProductExtraction.model_name == model_name)
+        if prompt_version is not None:
+            statement = statement.where(ProductExtraction.prompt_version == prompt_version)
+
+        rows = (await self._session.execute(statement)).all()
+        return [(row[0] or [], row[1]) for row in rows]
+
     async def count(
         self,
         *,
