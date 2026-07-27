@@ -212,20 +212,36 @@ def _to_row(
     )
 
 
-def _unreadable_row(item: CorpusItem, *, model_name: str, prompt_version: str) -> ExtractionRow:
-    """Строка для состава, который в модель не отправлялся.
+def _unreadable_row(
+    item: CorpusItem,
+    *,
+    model_name: str,
+    prompt_version: str,
+    usage: TokenUsage | None = None,
+    latency_s: float | None = None,
+) -> ExtractionRow:
+    """Строка для состава, который разобрать не удалось.
 
-    Пустой или длиннее контекста текст помечается `unreadable` и записывается.
+    Два случая. Текст пустой или длиннее контекста — в модель он не уходит,
+    токенов нет. Либо ответ оборвался на лимите вывода — вызов состоялся,
+    и тогда `usage` с `latency_s` заполнены: строка обязана нести свою
+    стоимость, иначе пересчёт цены прогона по таблице занизит её ровно
+    на самых дорогих продуктах.
+
     Записывается намеренно: иначе такие продукты остались бы «необработанными»
     навсегда и каждый перезапуск снова упирался бы в них. Аналитика записи
     с `unreadable` не берёт (раздел 8 брифа), так что метрики не портятся.
     """
+    usage = usage or TokenUsage()
     return ExtractionRow(
         code=item.code,
         source_lang=item.lang,
         unreadable=True,
         model_name=model_name,
         prompt_version=prompt_version,
+        input_tokens=usage.input_tokens,
+        output_tokens=usage.output_tokens,
+        latency_s=round(latency_s, 3) if latency_s is not None else None,
     )
 
 
@@ -326,10 +342,17 @@ async def _extract_one(
                 "Ответ непригоден — продукт помечен нечитаемым",
                 extra=safe_extra(code=item.code, error=str(exc)),
             )
+            usage = TokenUsage(input_tokens=exc.input_tokens, output_tokens=exc.output_tokens)
             return _Outcome(
                 status="invalid",
-                row=_unreadable_row(item, model_name=model_name, prompt_version=prompt.version),
-                usage=TokenUsage(input_tokens=exc.input_tokens, output_tokens=exc.output_tokens),
+                row=_unreadable_row(
+                    item,
+                    model_name=model_name,
+                    prompt_version=prompt.version,
+                    usage=usage,
+                    latency_s=exc.latency_s,
+                ),
+                usage=usage,
             )
 
     if response is None:

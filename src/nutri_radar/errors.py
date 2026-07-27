@@ -40,15 +40,26 @@ class ExtractionError(NutriRadarError):
     вывода, то и ту же обрезку, потратив столько же времени на генерацию.
     Продукт помечается невалидным, прогон идёт дальше.
 
-    Токены несёт на себе, потому что потрачены они реально: продукт в выборку
-    не попал, но в стоимость прогона входит. Простые int, а не `TokenUsage`,
-    чтобы модуль исключений не зависел от слоя моделей.
+    Токены и время несёт на себе, потому что потрачены они реально: продукт
+    в выборку не попал, но в стоимость и длительность прогона входит.
+    Обрезанный ответ вдобавок самый дорогой — он генерировался до упора
+    в лимит, — и потерять его из статистики значит занизить оценку прогона.
+    Простые числа, а не `TokenUsage`, чтобы модуль исключений не зависел
+    от слоя моделей.
     """
 
-    def __init__(self, message: str, *, input_tokens: int = 0, output_tokens: int = 0) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        latency_s: float = 0.0,
+    ) -> None:
         super().__init__(message)
         self.input_tokens = input_tokens
         self.output_tokens = output_tokens
+        self.latency_s = latency_s
 
 
 class DataSourceError(NutriRadarError):

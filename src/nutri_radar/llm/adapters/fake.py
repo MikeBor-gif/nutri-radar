@@ -89,6 +89,7 @@ class FakeLLM:
                 "подделка: ответ оборван лимитом вывода",
                 input_tokens=len(prompt) // 4,
                 output_tokens=limit,
+                latency_s=self._latency_s,
             )
 
         self._in_flight += 1

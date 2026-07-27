@@ -46,20 +46,24 @@ class BenchmarkResult:
     model_name: str
     sample_size: int = 0
 
+    # Время и токены **всех** вызовов, дошедших до модели, а не только удачных.
+    # Полный прогон оплачивает и неудачные, а обрезанный ответ вдобавок самый
+    # долгий из всех: он генерируется до упора в лимит вывода. Считать медиану
+    # без него — обещать прогон быстрее, чем он будет.
     latencies: list[float] = field(default_factory=list)
     input_tokens: list[int] = field(default_factory=list)
     output_tokens: list[int] = field(default_factory=list)
+    # А это — только про удачные разборы: смешивать сюда нечего.
     sugar_forms: list[int] = field(default_factory=list)
     ingredients_counts: list[int] = field(default_factory=list)
 
+    # Счётчик, а не длина `latencies`: с тех пор как в списке лежат и неудачные
+    # вызовы, выводить число успехов из его длины стало неверно.
+    succeeded: int = 0
     invalid: int = 0
     unavailable: int = 0
     unreadable: int = 0
     truncated: int = 0
-
-    @property
-    def succeeded(self) -> int:
-        return len(self.latencies)
 
     @property
     def invalid_share(self) -> float:
@@ -175,23 +179,36 @@ async def run_benchmark(
             # Обрыв на лимите вывода — это отказ данных, а не модели. В замере
             # он должен попадать в долю невалидных, иначе экстраполяция
             # обещает полный прогон там, где часть продуктов не разбирается.
+            #
+            # Но время и токены записываются: вызов дошёл до модели и стоил
+            # полной генерации до лимита. Выбросить его из статистики значит
+            # потерять как раз верхний хвост, ради которого замер и делается.
             result.invalid += 1
+            result.latencies.append(exc.latency_s)
+            result.input_tokens.append(exc.input_tokens)
+            result.output_tokens.append(exc.output_tokens)
             logger.warning(
                 "Непригодный ответ на замере",
-                extra=safe_extra(code=item.code, error=str(exc)),
+                extra=safe_extra(code=item.code, error=str(exc), latency_s=round(exc.latency_s, 2)),
             )
             continue
 
         try:
             extraction = ExtractionResult.model_validate(response.raw_json)
         except ValidationError as exc:
+            # Ответ по схеме не прошёл, но вызов состоялся и время занял —
+            # в оценку прогона он входит на тех же правах.
             result.invalid += 1
+            result.latencies.append(response.latency_s)
+            result.input_tokens.append(response.usage.input_tokens)
+            result.output_tokens.append(response.usage.output_tokens)
             logger.warning(
                 "Невалидный ответ на замере",
                 extra=safe_extra(code=item.code, error=exc.errors()[0]["msg"]),
             )
             continue
 
+        result.succeeded += 1
         result.latencies.append(response.latency_s)
         result.input_tokens.append(response.usage.input_tokens)
         result.output_tokens.append(response.usage.output_tokens)

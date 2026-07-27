@@ -295,6 +295,9 @@ class TestОборванныйОтвет:
         assert outcome.status == "invalid"
         assert outcome.row is not None
         assert outcome.row.unreadable is True
+        # Строка несёт свою стоимость: иначе пересчёт цены прогона по таблице
+        # занизит её ровно на самых дорогих продуктах.
+        assert outcome.row.output_tokens > 0
 
 
 class TestПараллелизм:

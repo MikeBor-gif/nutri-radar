@@ -139,6 +139,7 @@ class OllamaLLM:
                     f"из {limit} токенов): состав длиннее, чем помещается в ответ",
                     input_tokens=usage.input_tokens,
                     output_tokens=usage.output_tokens,
+                    latency_s=latency,
                 ) from exc
             # Модель ответила мусором, не упёршись в лимит: похоже на сбой
             # загрузки модели. Вот это ретрай лечит.
