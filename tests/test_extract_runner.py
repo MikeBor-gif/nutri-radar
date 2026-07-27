@@ -43,6 +43,10 @@ BROKEN_RESPONSE = {"ingredients": [{"canonical_name": "sugar"}]}
 # и сухофруктов дают десятки ингредиентов.
 LONG_TEXT = "Almonds, Banana, Blueberries, Cashews, Cranberries, Dates, Figs"
 
+# Сколько токенов вывода сжёг оборванный ответ. Задаётся тестом явно: подделка
+# не подставляет дефолт, чтобы не дублировать OLLAMA__MAX_OUTPUT_TOKENS.
+BURNED_TOKENS = 2048
+
 
 def _items(count: int, *, text: str = "Sugar, Milk, Glucose-Fructose Syrup") -> list[CorpusItem]:
     return [
@@ -217,7 +221,11 @@ class TestОборванныйОтвет:
     """
 
     async def test_не_ретраится(self, extract_settings: Settings):
-        llm = FakeLLM(default_response=GOOD_RESPONSE, truncate_marker=LONG_TEXT)
+        llm = FakeLLM(
+            default_response=GOOD_RESPONSE,
+            truncate_marker=LONG_TEXT,
+            truncate_output_tokens=BURNED_TOKENS,
+        )
 
         await run_extraction(llm, _items(1, text=LONG_TEXT), extract_settings, dry_run=True)
 
@@ -225,7 +233,11 @@ class TestОборванныйОтвет:
 
     async def test_считается_невалидным_а_не_отказом(self, extract_settings: Settings):
         """Модель работает — она просто не уместила ответ. Это не недоступность."""
-        llm = FakeLLM(default_response=GOOD_RESPONSE, truncate_marker=LONG_TEXT)
+        llm = FakeLLM(
+            default_response=GOOD_RESPONSE,
+            truncate_marker=LONG_TEXT,
+            truncate_output_tokens=BURNED_TOKENS,
+        )
 
         result = await run_extraction(
             llm, _items(1, text=LONG_TEXT), extract_settings, dry_run=True
@@ -243,7 +255,11 @@ class TestОборванныйОтвет:
         на данных, которые всего лишь не помещаются в ответ.
         """
         count = extract_settings.extract.max_consecutive_failures * 3
-        llm = FakeLLM(default_response=GOOD_RESPONSE, truncate_marker=LONG_TEXT)
+        llm = FakeLLM(
+            default_response=GOOD_RESPONSE,
+            truncate_marker=LONG_TEXT,
+            truncate_output_tokens=BURNED_TOKENS,
+        )
 
         result = await run_extraction(
             llm, _items(count, text=LONG_TEXT), extract_settings, dry_run=True
@@ -257,6 +273,7 @@ class TestОборванныйОтвет:
             responses={LONG_TEXT: GOOD_RESPONSE},
             default_response=GOOD_RESPONSE,
             truncate_marker=LONG_TEXT,
+            truncate_output_tokens=BURNED_TOKENS,
         )
         items = _items(2) + _items(1, text=LONG_TEXT)
 
@@ -267,7 +284,11 @@ class TestОборванныйОтвет:
 
     async def test_потраченные_токены_учтены(self, extract_settings: Settings):
         """Продукт в выборку не попал, но генерация до лимита реально оплачена."""
-        llm = FakeLLM(default_response=GOOD_RESPONSE, truncate_marker=LONG_TEXT)
+        llm = FakeLLM(
+            default_response=GOOD_RESPONSE,
+            truncate_marker=LONG_TEXT,
+            truncate_output_tokens=BURNED_TOKENS,
+        )
 
         result = await run_extraction(
             llm, _items(1, text=LONG_TEXT), extract_settings, dry_run=True
@@ -279,7 +300,11 @@ class TestОборванныйОтвет:
         self, extract_settings: Settings
     ):
         """Иначе продукт вечно «необработан», и каждый рестарт жжёт на нём минуты."""
-        llm = FakeLLM(default_response=GOOD_RESPONSE, truncate_marker=LONG_TEXT)
+        llm = FakeLLM(
+            default_response=GOOD_RESPONSE,
+            truncate_marker=LONG_TEXT,
+            truncate_output_tokens=BURNED_TOKENS,
+        )
 
         outcome = await _extract_one(
             llm,

@@ -29,6 +29,7 @@ class FakeLLM:
         model_name: str = "fake-model",
         fail_times: int = 0,
         truncate_marker: str | None = None,
+        truncate_output_tokens: int = 0,
         latency_s: float = 0.0,
         response_factory: Callable[[str], dict[str, Any]] | None = None,
     ) -> None:
@@ -42,6 +43,11 @@ class FakeLLM:
                 `ExtractionError` — воспроизводит обрыв ответа на лимите
                 вывода. В отличие от `fail_times` срабатывает каждый раз:
                 обрезка детерминирована, её не лечит повтор.
+            truncate_output_tokens: сколько токенов вывода считать сожжёнными
+                при обрыве. Ноль — взять лимит из самого вызова. Значение
+                задаётся тестом, а не подставляется по умолчанию: дефолт
+                дублировал бы `OLLAMA__MAX_OUTPUT_TOKENS` и молча разошёлся
+                бы с ним при первом же изменении конфига.
             latency_s: искусственная задержка, чтобы измерять параллелизм.
             response_factory: полностью своя логика ответа по промпту.
         """
@@ -55,6 +61,7 @@ class FakeLLM:
         self._model_name = model_name
         self._fail_times = fail_times
         self._truncate_marker = truncate_marker
+        self._truncate_output_tokens = truncate_output_tokens
         self._latency_s = latency_s
         self._factory = response_factory
 
@@ -84,11 +91,17 @@ class FakeLLM:
             raise LLMUnavailableError("подделка: модель недоступна")
 
         if self._truncate_marker is not None and self._truncate_marker in prompt:
-            limit = max_output_tokens or 2048
+            burned = max_output_tokens or self._truncate_output_tokens
+            if not burned:
+                raise ValueError(
+                    "FakeLLM: задайте truncate_output_tokens или max_output_tokens. "
+                    "Обрыв без числа сожжённых токенов не воспроизводит настоящий: "
+                    "именно эти токены отличают обрыв от прочих отказов."
+                )
             raise ExtractionError(
                 "подделка: ответ оборван лимитом вывода",
                 input_tokens=len(prompt) // 4,
-                output_tokens=limit,
+                output_tokens=burned,
                 latency_s=self._latency_s,
             )
 
