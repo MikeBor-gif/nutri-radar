@@ -33,7 +33,22 @@ class LLMUnavailableError(NutriRadarError):
 
 
 class ExtractionError(NutriRadarError):
-    """Модель ответила, но результат не проходит валидацию схемы."""
+    """Модель ответила, но результат непригоден: не разбирается или обрезан.
+
+    Ретраить бессмысленно. При temperature=0 и схеме, заданной параметром
+    генерации, повтор даёт тот же ответ — а если он оборвался на лимите
+    вывода, то и ту же обрезку, потратив столько же времени на генерацию.
+    Продукт помечается невалидным, прогон идёт дальше.
+
+    Токены несёт на себе, потому что потрачены они реально: продукт в выборку
+    не попал, но в стоимость прогона входит. Простые int, а не `TokenUsage`,
+    чтобы модуль исключений не зависел от слоя моделей.
+    """
+
+    def __init__(self, message: str, *, input_tokens: int = 0, output_tokens: int = 0) -> None:
+        super().__init__(message)
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
 
 
 class DataSourceError(NutriRadarError):

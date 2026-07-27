@@ -23,7 +23,7 @@ from typing import Any
 import httpx
 
 from nutri_radar.config import OllamaSettings
-from nutri_radar.errors import LLMUnavailableError
+from nutri_radar.errors import ExtractionError, LLMUnavailableError
 from nutri_radar.llm.models import LLMResponse, TokenUsage
 from nutri_radar.logging import safe_extra
 
@@ -112,20 +112,42 @@ class OllamaLLM:
             input_tokens=int(payload.get("prompt_eval_count") or 0),
             output_tokens=int(payload.get("eval_count") or 0),
         )
+        truncated = usage.output_tokens >= int(limit * _TRUNCATION_RATIO)
 
         # Ollama отдаёт содержимое строкой даже при генерации по схеме.
         try:
             raw_json = json.loads(content) if isinstance(content, str) else dict(content)
         except (json.JSONDecodeError, TypeError) as exc:
-            # При заданном format такого быть не должно, но если случилось —
-            # это отказ модели, а не проблема данных.
+            # Две разные причины с противоположной реакцией на ретрай.
+            #
+            # Длинный состав упёрся в `num_predict`, и JSON оборвался посреди
+            # массива. Это проблема данных: при temperature=0 повтор даст ту же
+            # обрезку, потратив ещё столько же времени на генерацию. Такой
+            # продукт пропускается как невалидный, а не ретраится.
+            if truncated:
+                logger.warning(
+                    "Ответ обрезан лимитом вывода и не разобрался — продукт невалиден",
+                    extra=safe_extra(
+                        model=self._settings.model,
+                        output_tokens=usage.output_tokens,
+                        limit=limit,
+                        head=str(content)[:200],
+                    ),
+                )
+                raise ExtractionError(
+                    f"Ollama оборвала JSON на лимите вывода ({usage.output_tokens} "
+                    f"из {limit} токенов): состав длиннее, чем помещается в ответ",
+                    input_tokens=usage.input_tokens,
+                    output_tokens=usage.output_tokens,
+                ) from exc
+            # Модель ответила мусором, не упёршись в лимит: похоже на сбой
+            # загрузки модели. Вот это ретрай лечит.
             logger.error(
                 "Ollama вернула не-JSON при заданной схеме",
                 extra=safe_extra(model=self._settings.model, head=str(content)[:200]),
             )
             raise LLMUnavailableError(f"Ollama вернула не-JSON: {exc}") from exc
 
-        truncated = usage.output_tokens >= int(limit * _TRUNCATION_RATIO)
         if truncated:
             logger.warning(
                 "Ответ упёрся в лимит вывода — список ингредиентов может быть неполным",

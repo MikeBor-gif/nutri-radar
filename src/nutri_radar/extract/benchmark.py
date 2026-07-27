@@ -25,7 +25,7 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from nutri_radar.config import Settings, get_settings
-from nutri_radar.errors import LLMUnavailableError
+from nutri_radar.errors import ExtractionError, LLMUnavailableError
 from nutri_radar.extract.corpus import CorpusItem
 from nutri_radar.extract.preprocess import prepare_text
 from nutri_radar.extract.prompts import load_prompt
@@ -170,6 +170,16 @@ async def run_benchmark(
         except LLMUnavailableError:
             result.unavailable += 1
             logger.error("Модель недоступна на замере", extra=safe_extra(code=item.code))
+            continue
+        except ExtractionError as exc:
+            # Обрыв на лимите вывода — это отказ данных, а не модели. В замере
+            # он должен попадать в долю невалидных, иначе экстраполяция
+            # обещает полный прогон там, где часть продуктов не разбирается.
+            result.invalid += 1
+            logger.warning(
+                "Непригодный ответ на замере",
+                extra=safe_extra(code=item.code, error=str(exc)),
+            )
             continue
 
         try:

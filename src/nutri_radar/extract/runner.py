@@ -18,9 +18,11 @@
    пропускается: доля пропусков входит в обязательные метрики проекта,
    поэтому она считается, а не проглатывается.
 4. **Ретрай только на недоступности модели.** `LLMUnavailableError` —
-   инфраструктурная проблема, её лечит пауза. `ValidationError` — проблема
-   данных или промпта: при `temperature=0` повтор даст тот же ответ, и прогон
-   встанет на месте.
+   инфраструктурная проблема, её лечит пауза. `ValidationError`
+   и `ExtractionError` — проблема данных или промпта: при `temperature=0`
+   повтор даст тот же ответ, и прогон встанет на месте. Отдельно важен
+   обрыв ответа на лимите вывода: генерация до лимита стоит минуты, поэтому
+   ретрай такого продукта — самый дорогой способ ничего не добиться.
 """
 
 from __future__ import annotations
@@ -40,7 +42,7 @@ from nutri_radar.config import Settings, get_settings
 from nutri_radar.db.models.run import Run, RunStage, RunStatus
 from nutri_radar.db.repositories.extraction import ExtractionRepository, ExtractionRow
 from nutri_radar.db.session import get_session
-from nutri_radar.errors import LLMUnavailableError
+from nutri_radar.errors import ExtractionError, LLMUnavailableError
 from nutri_radar.extract.corpus import CorpusItem
 from nutri_radar.extract.preprocess import PreprocessStats, prepare_text
 from nutri_radar.extract.prompts import Prompt, load_prompt
@@ -301,15 +303,34 @@ async def _extract_one(
     # слот. Иначе при недоступной Ollama в неё одновременно ломились бы все
     # задачи батча сразу, как только освободился бы слот.
     async with semaphore:
-        response = await _generate_with_retry(
-            llm,
-            rendered,
-            schema=schema,
-            settings=settings,
-            tracer=tracer,
-            code=item.code,
-            prompt_version=prompt.version,
-        )
+        try:
+            response = await _generate_with_retry(
+                llm,
+                rendered,
+                schema=schema,
+                settings=settings,
+                tracer=tracer,
+                code=item.code,
+                prompt_version=prompt.version,
+            )
+        except ExtractionError as exc:
+            # Ответ непригоден по вине данных, а не модели: ретрая не было
+            # и не будет. Считаем невалидным — счётчик подряд идущих отказов
+            # не трогаем, иначе десяток длинных составов уронит весь прогон.
+            #
+            # Строка всё равно пишется, и `unreadable` в ней честный: состав
+            # не помещается в лимит вывода этой модели. Без записи продукт
+            # остался бы «необработанным» навсегда, и каждый перезапуск снова
+            # тратил бы на него полную генерацию до лимита.
+            logger.warning(
+                "Ответ непригоден — продукт помечен нечитаемым",
+                extra=safe_extra(code=item.code, error=str(exc)),
+            )
+            return _Outcome(
+                status="invalid",
+                row=_unreadable_row(item, model_name=model_name, prompt_version=prompt.version),
+                usage=TokenUsage(input_tokens=exc.input_tokens, output_tokens=exc.output_tokens),
+            )
 
     if response is None:
         return _Outcome(status="unavailable")

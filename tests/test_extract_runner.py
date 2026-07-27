@@ -11,13 +11,19 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from nutri_radar.config import ExtractSettings, OllamaSettings, Settings
 from nutri_radar.errors import LLMUnavailableError
 from nutri_radar.extract.corpus import CorpusItem
-from nutri_radar.extract.runner import run_extraction
+from nutri_radar.extract.preprocess import PreprocessStats
+from nutri_radar.extract.prompts import load_prompt
+from nutri_radar.extract.runner import _extract_one, run_extraction
+from nutri_radar.extract.schemas import ExtractionResult
 from nutri_radar.llm.adapters.fake import FakeLLM
+from nutri_radar.tracing import NoOpTracer
 
 GOOD_RESPONSE = {
     "ingredients": [
@@ -32,6 +38,10 @@ GOOD_RESPONSE = {
 
 # Модель ответила, но не по схеме: нет обязательного kind.
 BROKEN_RESPONSE = {"ingredients": [{"canonical_name": "sugar"}]}
+
+# Состав, на котором ответ не помещается в лимит вывода: длинные списки орехов
+# и сухофруктов дают десятки ингредиентов.
+LONG_TEXT = "Almonds, Banana, Blueberries, Cashews, Cranberries, Dates, Figs"
 
 
 def _items(count: int, *, text: str = "Sugar, Milk, Glucose-Fructose Syrup") -> list[CorpusItem]:
@@ -196,6 +206,95 @@ class TestРетраи:
 
         # Остановились на границе батча, а не прошли весь корпус.
         assert llm.call_count < 30 * extract_settings.extract.max_retries
+
+
+class TestОборванныйОтвет:
+    """Длинный состав упирается в лимит вывода, и JSON обрывается.
+
+    Сценарий не выдуман: на нём встал полный прогон M2 (`reports/run_v3.err.log`,
+    продукт 0718604977580). Обрыв детерминирован — повтор тратит ещё минуты
+    генерации и приходит к той же обрезке.
+    """
+
+    async def test_не_ретраится(self, extract_settings: Settings):
+        llm = FakeLLM(default_response=GOOD_RESPONSE, truncate_marker=LONG_TEXT)
+
+        await run_extraction(llm, _items(1, text=LONG_TEXT), extract_settings, dry_run=True)
+
+        assert llm.call_count == 1
+
+    async def test_считается_невалидным_а_не_отказом(self, extract_settings: Settings):
+        """Модель работает — она просто не уместила ответ. Это не недоступность."""
+        llm = FakeLLM(default_response=GOOD_RESPONSE, truncate_marker=LONG_TEXT)
+
+        result = await run_extraction(
+            llm, _items(1, text=LONG_TEXT), extract_settings, dry_run=True
+        )
+
+        assert result.invalid == 1
+        assert result.unavailable == 0
+        assert result.processed == 0
+
+    async def test_пачка_обрывов_подряд_не_роняет_прогон(self, extract_settings: Settings):
+        """Регрессия: обрыв инкрементил счётчик отказов и останавливал прогон.
+
+        Длинные составы идут в корпусе кучно, и порога
+        `max_consecutive_failures` хватало, чтобы уронить шестичасовой прогон
+        на данных, которые всего лишь не помещаются в ответ.
+        """
+        count = extract_settings.extract.max_consecutive_failures * 3
+        llm = FakeLLM(default_response=GOOD_RESPONSE, truncate_marker=LONG_TEXT)
+
+        result = await run_extraction(
+            llm, _items(count, text=LONG_TEXT), extract_settings, dry_run=True
+        )
+
+        assert result.invalid == count
+        assert llm.call_count == count
+
+    async def test_обрыв_не_мешает_соседям_по_батчу(self, extract_settings: Settings):
+        llm = FakeLLM(
+            responses={LONG_TEXT: GOOD_RESPONSE},
+            default_response=GOOD_RESPONSE,
+            truncate_marker=LONG_TEXT,
+        )
+        items = _items(2) + _items(1, text=LONG_TEXT)
+
+        result = await run_extraction(llm, items, extract_settings, dry_run=True)
+
+        assert result.processed == 2
+        assert result.invalid == 1
+
+    async def test_потраченные_токены_учтены(self, extract_settings: Settings):
+        """Продукт в выборку не попал, но генерация до лимита реально оплачена."""
+        llm = FakeLLM(default_response=GOOD_RESPONSE, truncate_marker=LONG_TEXT)
+
+        result = await run_extraction(
+            llm, _items(1, text=LONG_TEXT), extract_settings, dry_run=True
+        )
+
+        assert result.usage.output_tokens > 0
+
+    async def test_пишется_строка_чтобы_перезапуск_не_упирался_снова(
+        self, extract_settings: Settings
+    ):
+        """Иначе продукт вечно «необработан», и каждый рестарт жжёт на нём минуты."""
+        llm = FakeLLM(default_response=GOOD_RESPONSE, truncate_marker=LONG_TEXT)
+
+        outcome = await _extract_one(
+            llm,
+            _items(1, text=LONG_TEXT)[0],
+            prompt=load_prompt("v1"),
+            schema=ExtractionResult.model_json_schema(),
+            settings=extract_settings,
+            semaphore=asyncio.Semaphore(1),
+            tracer=NoOpTracer(),
+            stats=PreprocessStats(),
+        )
+
+        assert outcome.status == "invalid"
+        assert outcome.row is not None
+        assert outcome.row.unreadable is True
 
 
 class TestПараллелизм:

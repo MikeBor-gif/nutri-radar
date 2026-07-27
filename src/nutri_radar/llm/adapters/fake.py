@@ -14,7 +14,7 @@ import asyncio
 from collections.abc import Callable
 from typing import Any
 
-from nutri_radar.errors import LLMUnavailableError
+from nutri_radar.errors import ExtractionError, LLMUnavailableError
 from nutri_radar.llm.models import LLMResponse, TokenUsage
 
 
@@ -28,6 +28,7 @@ class FakeLLM:
         default_response: dict[str, Any] | None = None,
         model_name: str = "fake-model",
         fail_times: int = 0,
+        truncate_marker: str | None = None,
         latency_s: float = 0.0,
         response_factory: Callable[[str], dict[str, Any]] | None = None,
     ) -> None:
@@ -37,6 +38,10 @@ class FakeLLM:
             default_response: что отдавать, если ничего не совпало.
             fail_times: сколько первых вызовов должны упасть с
                 `LLMUnavailableError` — для проверки ретраев.
+            truncate_marker: подстрока промпта, на которой вызов падает с
+                `ExtractionError` — воспроизводит обрыв ответа на лимите
+                вывода. В отличие от `fail_times` срабатывает каждый раз:
+                обрезка детерминирована, её не лечит повтор.
             latency_s: искусственная задержка, чтобы измерять параллелизм.
             response_factory: полностью своя логика ответа по промпту.
         """
@@ -49,6 +54,7 @@ class FakeLLM:
         }
         self._model_name = model_name
         self._fail_times = fail_times
+        self._truncate_marker = truncate_marker
         self._latency_s = latency_s
         self._factory = response_factory
 
@@ -76,6 +82,14 @@ class FakeLLM:
         if self._fail_times > 0:
             self._fail_times -= 1
             raise LLMUnavailableError("подделка: модель недоступна")
+
+        if self._truncate_marker is not None and self._truncate_marker in prompt:
+            limit = max_output_tokens or 2048
+            raise ExtractionError(
+                "подделка: ответ оборван лимитом вывода",
+                input_tokens=len(prompt) // 4,
+                output_tokens=limit,
+            )
 
         self._in_flight += 1
         self.max_in_flight = max(self.max_in_flight, self._in_flight)
