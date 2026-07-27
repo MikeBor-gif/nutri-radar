@@ -1,0 +1,56 @@
+// ЧЕРНОВИК. Составлен ассистентом по согласованию с владельцем проекта и
+// требует ревизии человеком — см. README.md в этом каталоге.
+// Формат: одна каноническая сущность на строку.
+//   {"canonical_name": "...", "kind": "...", "aliases": {"<язык>": ["..."]}}
+// Каноническое имя — английское, в нижнем регистре: имена сопоставляются
+// с таксономией Open Food Facts, где теги вида en:sugar.
+//
+// --- формы сахара --------------------------------------------------------
+{"canonical_name": "sugar", "kind": "sugar", "aliases": {"en": ["sugar", "white sugar", "refined sugar", "sucrose", "granulated sugar"], "ru": ["сахар", "сахар белый", "белый сахар", "сахароза", "сахар-песок"], "de": ["zucker", "saccharose", "weisser zucker"], "fr": ["sucre", "saccharose", "sucre blanc"], "pl": ["cukier", "sacharoza", "cukier biały"]}}
+{"canonical_name": "brown sugar", "kind": "sugar", "aliases": {"en": ["brown sugar", "raw sugar", "unrefined sugar", "muscovado", "demerara sugar"], "ru": ["коричневый сахар", "нерафинированный сахар"], "de": ["brauner zucker", "vollrohrzucker"], "fr": ["sucre roux", "cassonade", "sucre brun"], "pl": ["cukier brązowy", "cukier nierafinowany"]}}
+{"canonical_name": "cane sugar", "kind": "sugar", "aliases": {"en": ["cane sugar", "sugar cane"], "ru": ["тростниковый сахар", "сахар тростниковый"], "de": ["rohrzucker"], "fr": ["sucre de canne"], "pl": ["cukier trzcinowy"]}}
+{"canonical_name": "beet sugar", "kind": "sugar", "aliases": {"en": ["beet sugar", "sugar beet"], "ru": ["свекловичный сахар", "сахар свекловичный"], "de": ["rubenzucker", "rübenzucker"], "fr": ["sucre de betterave"], "pl": ["cukier buraczany"]}}
+{"canonical_name": "icing sugar", "kind": "sugar", "aliases": {"en": ["icing sugar", "powdered sugar", "confectioners sugar"], "ru": ["сахарная пудра"], "de": ["puderzucker"], "fr": ["sucre glace"], "pl": ["cukier puder"]}}
+{"canonical_name": "invert sugar", "kind": "sugar", "aliases": {"en": ["invert sugar", "invert sugar syrup"], "ru": ["инвертный сахар", "инвертный сироп", "инвертный сахарный сироп"], "de": ["invertzucker", "invertzuckersirup"], "fr": ["sucre inverti", "sirop de sucre inverti"], "pl": ["cukier inwertowany", "syrop cukru inwertowanego"]}}
+{"canonical_name": "caramelised sugar", "kind": "sugar", "aliases": {"en": ["caramelised sugar", "caramelized sugar", "burnt sugar"], "ru": ["карамелизованный сахар", "жжёный сахар"], "de": ["karamellisierter zucker", "karamellzucker"], "fr": ["sucre caramelise", "sucre caramélisé"], "pl": ["cukier karmelizowany"]}}
+{"canonical_name": "coconut sugar", "kind": "sugar", "aliases": {"en": ["coconut sugar", "coconut blossom sugar"], "ru": ["кокосовый сахар"], "de": ["kokosblutenzucker", "kokosblütenzucker"], "fr": ["sucre de coco", "sucre de fleur de coco"], "pl": ["cukier kokosowy"]}}
+{"canonical_name": "palm sugar", "kind": "sugar", "aliases": {"en": ["palm sugar"], "ru": ["пальмовый сахар"], "de": ["palmzucker"], "fr": ["sucre de palme"], "pl": ["cukier palmowy"]}}
+{"canonical_name": "glucose", "kind": "sugar", "aliases": {"en": ["glucose", "dextrose", "grape sugar", "glucose powder"], "ru": ["глюкоза", "декстроза", "виноградный сахар"], "de": ["glukose", "traubenzucker", "dextrose"], "fr": ["dextrose"], "pl": ["glukoza", "dekstroza"]}}
+{"canonical_name": "glucose syrup", "kind": "sugar", "aliases": {"en": ["glucose syrup", "dried glucose syrup"], "ru": ["глюкозный сироп", "сироп глюкозы", "патока крахмальная"], "de": ["glukosesirup", "glucosesirup"], "fr": ["sirop de glucose"], "pl": ["syrop glukozowy"]}}
+{"canonical_name": "glucose-fructose syrup", "kind": "sugar", "aliases": {"en": ["glucose fructose syrup", "fructose glucose syrup", "high fructose corn syrup", "hfcs", "isoglucose"], "ru": ["глюкозно фруктозный сироп", "фруктозно глюкозный сироп", "изоглюкоза"], "de": ["glukose fruktose sirup", "fruktose glukose sirup"], "fr": ["sirop de glucose fructose", "sirop de fructose glucose"], "pl": ["syrop glukozowo fruktozowy", "syrop fruktozowo glukozowy"]}}
+{"canonical_name": "fructose", "kind": "sugar", "aliases": {"en": ["fructose", "fruit sugar"], "ru": ["фруктоза", "фруктовый сахар"], "de": ["fruktose", "fructose", "fruchtzucker"], "fr": ["sucre de fruit"], "pl": ["fruktoza"]}}
+{"canonical_name": "corn syrup", "kind": "sugar", "aliases": {"en": ["corn syrup"], "ru": ["кукурузный сироп", "кукурузная патока"], "de": ["maissirup"], "fr": ["sirop de mais", "sirop de maïs"], "pl": ["syrop kukurydziany"]}}
+{"canonical_name": "maltodextrin", "kind": "sugar", "aliases": {"en": ["maltodextrin", "maltodextrine"], "ru": ["мальтодекстрин"], "de": ["maltodextrin"], "fr": ["maltodextrine"], "pl": ["maltodekstryna"]}}
+{"canonical_name": "dextrin", "kind": "sugar", "aliases": {"en": ["dextrin"], "ru": ["декстрин"], "de": ["dextrin"], "fr": ["dextrine"], "pl": ["dekstryna"]}}
+{"canonical_name": "maltose", "kind": "sugar", "aliases": {"en": ["maltose", "malt sugar"], "ru": ["мальтоза", "солодовый сахар"], "de": ["maltose", "malzzucker"], "fr": ["sucre de malt"], "pl": ["maltoza"]}}
+{"canonical_name": "malt extract", "kind": "sugar", "aliases": {"en": ["malt extract", "barley malt extract"], "ru": ["солодовый экстракт", "экстракт солода", "ячменно солодовый экстракт"], "de": ["malzextrakt", "gerstenmalzextrakt"], "fr": ["extrait de malt"], "pl": ["ekstrakt słodowy"]}}
+{"canonical_name": "barley malt syrup", "kind": "sugar", "aliases": {"en": ["barley malt syrup", "malt syrup"], "ru": ["ячменно солодовый сироп", "солодовый сироп"], "de": ["gerstenmalzsirup", "malzsirup"], "fr": ["sirop de malt d orge", "sirop de malt"], "pl": ["syrop słodowy jęczmienny", "syrop słodowy"]}}
+{"canonical_name": "molasses", "kind": "sugar", "aliases": {"en": ["molasses", "treacle", "black treacle"], "ru": ["меласса", "чёрная патока", "патока"], "de": ["melasse", "zuckerrubensirup", "zuckerrübensirup"], "fr": ["melasse", "mélasse"], "pl": ["melasa"]}}
+{"canonical_name": "golden syrup", "kind": "sugar", "aliases": {"en": ["golden syrup", "partially inverted refiners syrup"], "ru": ["золотой сироп"], "de": ["goldsirup"], "fr": ["sirop de sucre roux"], "pl": ["syrop złocisty"]}}
+{"canonical_name": "honey", "kind": "sugar", "aliases": {"en": ["honey"], "ru": ["мёд", "мед"], "de": ["honig"], "fr": ["miel"], "pl": ["miód"]}}
+{"canonical_name": "lactose", "kind": "sugar", "aliases": {"en": ["lactose", "milk sugar"], "ru": ["лактоза", "молочный сахар"], "de": ["laktose", "lactose", "milchzucker"], "fr": ["sucre de lait"], "pl": ["laktoza"]}}
+{"canonical_name": "trehalose", "kind": "sugar", "aliases": {"en": ["trehalose"], "ru": ["трегалоза"], "de": ["trehalose"], "fr": ["trehalose", "tréhalose"], "pl": ["trehaloza"]}}
+{"canonical_name": "agave syrup", "kind": "sugar", "aliases": {"en": ["agave syrup", "agave nectar"], "ru": ["сироп агавы", "нектар агавы"], "de": ["agavendicksaft", "agavensirup"], "fr": ["sirop d agave"], "pl": ["syrop z agawy"]}}
+{"canonical_name": "maple syrup", "kind": "sugar", "aliases": {"en": ["maple syrup"], "ru": ["кленовый сироп"], "de": ["ahornsirup"], "fr": ["sirop d erable", "sirop d érable"], "pl": ["syrop klonowy"]}}
+{"canonical_name": "date syrup", "kind": "sugar", "aliases": {"en": ["date syrup", "date paste"], "ru": ["финиковый сироп", "финиковая паста"], "de": ["dattelsirup"], "fr": ["sirop de datte"], "pl": ["syrop daktylowy"]}}
+{"canonical_name": "rice syrup", "kind": "sugar", "aliases": {"en": ["rice syrup", "brown rice syrup"], "ru": ["рисовый сироп"], "de": ["reissirup"], "fr": ["sirop de riz"], "pl": ["syrop ryżowy"]}}
+{"canonical_name": "wheat syrup", "kind": "sugar", "aliases": {"en": ["wheat syrup"], "ru": ["пшеничный сироп"], "de": ["weizensirup"], "fr": ["sirop de ble", "sirop de blé"], "pl": ["syrop pszenny"]}}
+{"canonical_name": "fruit juice concentrate", "kind": "sugar", "aliases": {"en": ["fruit juice concentrate", "concentrated fruit juice"], "ru": ["концентрированный фруктовый сок", "концентрат фруктового сока"], "de": ["fruchtsaftkonzentrat"], "fr": ["jus de fruit concentre", "jus de fruit concentré"], "pl": ["zagęszczony sok owocowy"]}}
+{"canonical_name": "apple juice concentrate", "kind": "sugar", "aliases": {"en": ["apple juice concentrate", "concentrated apple juice"], "ru": ["концентрированный яблочный сок", "концентрат яблочного сока"], "de": ["apfelsaftkonzentrat"], "fr": ["jus de pomme concentre", "jus de pomme concentré"], "pl": ["zagęszczony sok jabłkowy"]}}
+{"canonical_name": "grape juice concentrate", "kind": "sugar", "aliases": {"en": ["grape juice concentrate", "concentrated grape juice"], "ru": ["концентрированный виноградный сок", "концентрат виноградного сока"], "de": ["traubensaftkonzentrat"], "fr": ["jus de raisin concentre", "jus de raisin concentré"], "pl": ["zagęszczony sok winogronowy"]}}
+{"canonical_name": "sugar syrup", "kind": "sugar", "aliases": {"en": ["sugar syrup", "syrup"], "ru": ["сахарный сироп", "сироп"], "de": ["zuckersirup", "sirup"], "fr": ["sirop de sucre", "sirop"], "pl": ["syrop cukrowy", "syrop"]}}
+//
+// --- подсластители: НЕ формы сахара, но модель их путает --------------------
+// Живая проверка: на коротком промпте модель относит к sugar всё сладкое.
+// Тип из словаря побеждает тип модели, поэтому эти строки прямо влияют на
+// правильность ключевой величины проекта.
+{"canonical_name": "sorbitol", "kind": "sweetener", "aliases": {"en": ["sorbitol", "e420"], "ru": ["сорбит", "сорбитол"], "de": ["sorbit"], "fr": ["sorbitol"], "pl": ["sorbitol"]}}
+{"canonical_name": "xylitol", "kind": "sweetener", "aliases": {"en": ["xylitol", "e967"], "ru": ["ксилит", "ксилитол"], "de": ["xylit"], "fr": ["xylitol"], "pl": ["ksylitol"]}}
+{"canonical_name": "maltitol", "kind": "sweetener", "aliases": {"en": ["maltitol", "maltitol syrup", "e965"], "ru": ["мальтит", "мальтитол"], "de": ["maltit"], "fr": ["maltitol"], "pl": ["maltitol"]}}
+{"canonical_name": "erythritol", "kind": "sweetener", "aliases": {"en": ["erythritol", "e968"], "ru": ["эритрит", "эритритол"], "de": ["erythrit"], "fr": ["erythritol", "érythritol"], "pl": ["erytrytol"]}}
+{"canonical_name": "isomalt", "kind": "sweetener", "aliases": {"en": ["isomalt", "e953"], "ru": ["изомальт"], "de": ["isomalt"], "fr": ["isomalt"], "pl": ["izomalt"]}}
+{"canonical_name": "steviol glycosides", "kind": "sweetener", "aliases": {"en": ["steviol glycosides", "stevia", "e960"], "ru": ["стевиолгликозиды", "стевия"], "de": ["steviolglycoside", "stevia"], "fr": ["glycosides de steviol", "stevia"], "pl": ["glikozydy stewiolowe", "stewia"]}}
+{"canonical_name": "aspartame", "kind": "sweetener", "aliases": {"en": ["aspartame", "e951"], "ru": ["аспартам"], "de": ["aspartam"], "fr": ["aspartame"], "pl": ["aspartam"]}}
+{"canonical_name": "acesulfame k", "kind": "sweetener", "aliases": {"en": ["acesulfame k", "acesulfame potassium", "e950"], "ru": ["ацесульфам калия", "ацесульфам к"], "de": ["acesulfam k"], "fr": ["acesulfame k", "acésulfame k"], "pl": ["acesulfam k"]}}
+{"canonical_name": "sucralose", "kind": "sweetener", "aliases": {"en": ["sucralose", "e955"], "ru": ["сукралоза"], "de": ["sucralose"], "fr": ["sucralose"], "pl": ["sukraloza"]}}
+{"canonical_name": "saccharin", "kind": "sweetener", "aliases": {"en": ["saccharin", "e954"], "ru": ["сахарин"], "de": ["saccharin"], "fr": ["saccharine"], "pl": ["sacharyna"]}}

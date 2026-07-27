@@ -7,6 +7,14 @@
 
 from __future__ import annotations
 
+from nutri_radar.db.repositories.extraction import ExtractionRepository, ExtractionRow
+from nutri_radar.db.repositories.ingredient import AliasRow, IngredientAliasRepository
 from nutri_radar.db.repositories.product import ProductRepository
 
-__all__ = ["ProductRepository"]
+__all__ = [
+    "AliasRow",
+    "ExtractionRepository",
+    "ExtractionRow",
+    "IngredientAliasRepository",
+    "ProductRepository",
+]

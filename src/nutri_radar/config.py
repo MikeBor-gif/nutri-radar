@@ -255,6 +255,22 @@ class ExtractSettings(BaseSettings):
     # Порог экстраполяции замера: дольше — повод сузить корпус, а не ждать.
     max_run_hours: float = 6.0
 
+    # Размер батча прогона. Результаты уходят в БД после каждого батча,
+    # поэтому Ctrl+C стоит не больше одного батча работы. Больше батч —
+    # реже транзакции, но дороже обрыв.
+    batch_size: int = 50
+
+    # Ретраи ТОЛЬКО на недоступности модели (LLMUnavailableError). Невалидный
+    # разбор не ретраится: при temperature=0 повтор даст тот же ответ, и прогон
+    # встанет на месте.
+    max_retries: int = 3
+    retry_backoff_s: float = 2.0
+
+    # Столько отказов модели подряд означают, что Ollama упала, а не что
+    # попался трудный состав. Продолжать бессмысленно: прогон останавливается,
+    # уже записанное сохраняется, перезапуск продолжит с этого места.
+    max_consecutive_failures: int = 10
+
     @field_validator("unknown_share")
     @classmethod
     def _validate_share(cls, value: float) -> float:
@@ -267,6 +283,24 @@ class ExtractSettings(BaseSettings):
     def _validate_corpus_size(cls, value: int) -> int:
         if value < 1:
             raise ValueError(f"corpus_size={value} должен быть >= 1")
+        return value
+
+    @field_validator("batch_size")
+    @classmethod
+    def _validate_batch_size(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError(f"batch_size={value} должен быть >= 1")
+        return value
+
+    @field_validator("max_retries")
+    @classmethod
+    def _validate_max_retries(cls, value: int) -> int:
+        # Ноль означал бы «ни одной попытки», а не «без ретраев»: первая
+        # попытка — это тоже попытка.
+        if value < 1:
+            raise ValueError(
+                f"max_retries={value} должен быть >= 1 (первая попытка тоже считается)"
+            )
         return value
 
 
