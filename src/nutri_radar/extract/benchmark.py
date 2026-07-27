@@ -103,15 +103,24 @@ class BenchmarkResult:
             return 0.0
         return sum(1 for value in self.sugar_forms if value == 0) / len(self.sugar_forms)
 
-    def extrapolate(self, corpus_size: int, concurrency: int) -> tuple[float, int]:
+    def extrapolate(self, corpus_size: int, concurrency: int = 1) -> tuple[float, int]:
         """Оценка полного прогона: (часы, суммарные токены).
 
-        Считается по медиане и делится на параллелизм: при `max_concurrency > 1`
-        запросы идут одновременно, и «сумма латентностей» завысила бы время.
+        Считается по медиане **без деления на параллелизм**. Раньше здесь стояло
+        деление — предполагалось, что два одновременных запроса дают двукратное
+        ускорение. Измерение это опровергло: на одних и тех же 40 продуктах
+        прогон с параллелизмом 2 дал 20,96 с на продукт против медианы 14,20 с
+        последовательного замера. На 6 ГБ VRAM модель занимает GPU целиком,
+        и второй запрос не выполняется параллельно, а ждёт своей очереди,
+        добавляя накладные расходы.
+
+        Аргумент `concurrency` оставлен ради совместимости вызовов и потому,
+        что на другом железе ускорение может появиться. Но по умолчанию оценка
+        консервативная: лучше переоценить время прогона, чем недооценить.
         """
         if not self.latencies:
             return 0.0, 0
-        seconds = self.median_latency * corpus_size / max(concurrency, 1)
+        seconds = self.median_latency * corpus_size
         tokens = int((self.mean_input_tokens + self.mean_output_tokens) * corpus_size)
         return seconds / 3600, tokens
 
@@ -201,9 +210,7 @@ async def run_benchmark(
 
 
 def _log_result(result: BenchmarkResult, settings: Settings) -> None:
-    hours, tokens = result.extrapolate(
-        settings.extract.corpus_size, settings.ollama.max_concurrency
-    )
+    hours, tokens = result.extrapolate(settings.extract.corpus_size)
     logger.info(
         "Замер завершён",
         extra=safe_extra(
@@ -242,9 +249,7 @@ def _log_result(result: BenchmarkResult, settings: Settings) -> None:
 
 def format_result(result: BenchmarkResult, settings: Settings) -> str:
     """Человекочитаемый отчёт."""
-    hours, tokens = result.extrapolate(
-        settings.extract.corpus_size, settings.ollama.max_concurrency
-    )
+    hours, tokens = result.extrapolate(settings.extract.corpus_size)
     return "\n".join(
         [
             f"Промпт:            {result.prompt_version}",
@@ -268,7 +273,8 @@ def format_result(result: BenchmarkResult, settings: Settings) -> str:
             " в среднем",
             "",
             f"ЭКСТРАПОЛЯЦИЯ на {settings.extract.corpus_size} продуктов:",
-            f"  время:  {hours:.1f} часов (параллелизм {settings.ollama.max_concurrency})",
+            f"  время:  {hours:.1f} часов (по медиане, без скидки на параллелизм —",
+            "           измерение показало, что на 6 ГБ VRAM он не ускоряет)",
             f"  токены: {tokens}",
         ]
     )
