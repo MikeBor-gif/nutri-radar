@@ -21,6 +21,7 @@ from nutri_radar.extract.corpus import (
     CorpusItem,
     _language_quotas,
     collect_stats,
+    sample_for_benchmark,
     select_llm_corpus,
 )
 
@@ -117,6 +118,66 @@ class TestОтборКорпуса:
         items = await select_llm_corpus(corpus_settings, size=20)
 
         assert len(items) == 20
+
+
+class TestВыборкаДляЗамера:
+    """Дефект найден на живом замере: первые 20 по коду — все англоязычные."""
+
+    async def test_в_замер_попадают_все_языки(self, corpus_settings: Settings, monkeypatch):
+        monkeypatch.setattr(corpus_module, "_fetch_stratum", _fake_fetch({}))
+        items = await select_llm_corpus(corpus_settings)
+
+        sample = sample_for_benchmark(items, 20)
+
+        assert {item.lang for item in sample} == {"en", "ru"}
+
+    async def test_обе_части_выборки_представлены(self, corpus_settings: Settings, monkeypatch):
+        monkeypatch.setattr(corpus_module, "_fetch_stratum", _fake_fetch({}))
+        items = await select_llm_corpus(corpus_settings)
+
+        sample = sample_for_benchmark(items, 20)
+
+        assert {item.stratum for item in sample} == {"unknown", "control"}
+
+    async def test_первые_по_коду_дали_бы_одну_группу(self, corpus_settings: Settings, monkeypatch):
+        """Тест на сам дефект: срез по порядку не представителен."""
+        monkeypatch.setattr(corpus_module, "_fetch_stratum", _fake_fetch({}))
+        items = await select_llm_corpus(corpus_settings)
+
+        naive = items[:20]
+
+        assert len({item.lang for item in naive}) == 1
+
+    async def test_выборка_детерминирована(self, corpus_settings: Settings, monkeypatch):
+        monkeypatch.setattr(corpus_module, "_fetch_stratum", _fake_fetch({}))
+        items = await select_llm_corpus(corpus_settings)
+
+        first = [item.code for item in sample_for_benchmark(items, 20)]
+        second = [item.code for item in sample_for_benchmark(items, 20)]
+
+        assert first == second
+
+    async def test_размер_соблюдается(self, corpus_settings: Settings, monkeypatch):
+        monkeypatch.setattr(corpus_module, "_fetch_stratum", _fake_fetch({}))
+        items = await select_llm_corpus(corpus_settings)
+
+        assert len(sample_for_benchmark(items, 7)) == 7
+
+    def test_запрошено_больше_чем_есть(self):
+        items = [
+            CorpusItem(
+                code="1",
+                ingredients_text="Sugar",
+                lang="en",
+                nutriscore_grade=None,
+                unknown_ingredients_n=0,
+                stratum="control",
+            )
+        ]
+
+        assert len(sample_for_benchmark(items, 20)) == 1
+        assert sample_for_benchmark([], 20) == []
+        assert sample_for_benchmark(items, 0) == []
 
 
 class TestНедоборКвоты:

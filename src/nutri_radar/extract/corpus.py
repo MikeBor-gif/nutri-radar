@@ -201,6 +201,55 @@ async def select_llm_corpus(
     return items
 
 
+def sample_for_benchmark(items: list[CorpusItem], size: int) -> list[CorpusItem]:
+    """Представительная подвыборка для замера.
+
+    Существует из-за дефекта, найденного на первом же живом замере: «первые N
+    продуктов корпуса» дали **20 англоязычных из 20**. Причина не случайная —
+    корпус отсортирован по штрихкоду, а штрихкод начинается с префикса страны,
+    поэтому сортировка по коду группирует продукты по стране. Многоязычность,
+    главный аргумент проекта, замером не проверялась вовсе.
+
+    Здесь продукты берутся по кругу из каждой группы (язык, часть выборки),
+    поэтому в замер попадают все пять языков и обе части. Порядок остаётся
+    детерминированным: группы обходятся по алфавиту, внутри группы сохраняется
+    исходный порядок по коду, результат снова сортируется по коду.
+    """
+    if size <= 0 or not items:
+        return []
+
+    groups: dict[tuple[str, str], list[CorpusItem]] = {}
+    for item in items:
+        groups.setdefault((item.lang, item.stratum), []).append(item)
+
+    picked: list[CorpusItem] = []
+    depth = 0
+    while len(picked) < min(size, len(items)):
+        added = False
+        for key in sorted(groups):
+            bucket = groups[key]
+            if depth < len(bucket):
+                picked.append(bucket[depth])
+                added = True
+                if len(picked) == size:
+                    break
+        if not added:
+            # Все группы исчерпаны — больше брать неоткуда.
+            break
+        depth += 1
+
+    picked.sort(key=lambda item: item.code)
+    logger.info(
+        "Выборка для замера собрана",
+        extra=safe_extra(
+            size=len(picked),
+            requested=size,
+            by_lang=dict(Counter(item.lang for item in picked)),
+        ),
+    )
+    return picked
+
+
 def collect_stats(items: list[CorpusItem]) -> CorpusStats:
     stats = CorpusStats()
     for item in items:

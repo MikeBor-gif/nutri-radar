@@ -24,7 +24,13 @@ from nutri_radar.db.repositories.extraction import ExtractionRepository
 from nutri_radar.db.session import dispose_engine, get_session
 from nutri_radar.errors import ConfigurationError
 from nutri_radar.extract import benchmark as benchmark_module
-from nutri_radar.extract.corpus import CorpusItem, collect_stats, format_stats, select_llm_corpus
+from nutri_radar.extract.corpus import (
+    CorpusItem,
+    collect_stats,
+    format_stats,
+    sample_for_benchmark,
+    select_llm_corpus,
+)
 from nutri_radar.extract.normalize import (
     NormalizationStats,
     format_unknown_report,
@@ -131,13 +137,14 @@ def benchmark(
 
     Обязателен до полного прогона (раздел 3a брифа). Все версии меряются
     на ОДНИХ И ТЕХ ЖЕ продуктах — иначе сравнение версий ничего не значит.
+    Выборка представительная по языкам: первые N по коду дали бы одну страну.
     """
     settings = get_settings()
     versions = [part.strip() for part in prompt.split(",") if part.strip()] or available_versions()
     sample_size = size or settings.extract.benchmark_size
 
     async def _work() -> list[benchmark_module.BenchmarkResult]:
-        items = (await _corpus(settings, None))[:sample_size]
+        items = sample_for_benchmark(await _corpus(settings, None), sample_size)
         results = []
         async with _http_client(settings) as client:
             llm = build_llm(settings, client)
