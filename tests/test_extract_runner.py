@@ -21,7 +21,7 @@ from nutri_radar.extract.corpus import CorpusItem
 from nutri_radar.extract.preprocess import PreprocessStats
 from nutri_radar.extract.prompts import load_prompt
 from nutri_radar.extract.runner import _extract_one, run_extraction
-from nutri_radar.extract.schemas import ExtractionResult
+from nutri_radar.extract.schemas import ExtractionResult, SkipReason
 from nutri_radar.llm.adapters.fake import FakeLLM
 from nutri_radar.tracing import NoOpTracer
 
@@ -298,6 +298,64 @@ class TestОборванныйОтвет:
         # Строка несёт свою стоимость: иначе пересчёт цены прогона по таблице
         # занизит её ровно на самых дорогих продуктах.
         assert outcome.row.output_tokens > 0
+        assert outcome.row.skip_reason == SkipReason.OUTPUT_LIMIT
+
+
+class TestПричинаПропуска:
+    """Все пропуски дают `unreadable`, но лечатся разным — причина обязана быть."""
+
+    async def _outcome(self, settings: Settings, llm: FakeLLM, item: CorpusItem):
+        return await _extract_one(
+            llm,
+            item,
+            prompt=load_prompt("v1"),
+            schema=ExtractionResult.model_json_schema(),
+            settings=settings,
+            semaphore=asyncio.Semaphore(1),
+            tracer=NoOpTracer(),
+            stats=PreprocessStats(),
+        )
+
+    async def test_пустой_состав(self, extract_settings: Settings):
+        outcome = await self._outcome(
+            extract_settings,
+            FakeLLM(default_response=GOOD_RESPONSE),
+            _items(1, text="   ")[0],
+        )
+
+        assert outcome.row is not None
+        assert outcome.row.skip_reason == SkipReason.EMPTY
+
+    async def test_состав_длиннее_контекста(self, extract_settings: Settings):
+        huge = "sugar, " * extract_settings.ollama.num_ctx
+        outcome = await self._outcome(
+            extract_settings,
+            FakeLLM(default_response=GOOD_RESPONSE),
+            _items(1, text=huge)[0],
+        )
+
+        assert outcome.row is not None
+        assert outcome.row.skip_reason == SkipReason.TOO_LONG
+
+    async def test_модель_объявила_состав_нечитаемым(self, extract_settings: Settings):
+        unreadable_response = {**GOOD_RESPONSE, "unreadable": True}
+        outcome = await self._outcome(
+            extract_settings,
+            FakeLLM(default_response=unreadable_response),
+            _items(1)[0],
+        )
+
+        assert outcome.row is not None
+        assert outcome.row.skip_reason == SkipReason.MODEL_UNREADABLE
+
+    async def test_удачный_разбор_причины_не_имеет(self, extract_settings: Settings):
+        outcome = await self._outcome(
+            extract_settings, FakeLLM(default_response=GOOD_RESPONSE), _items(1)[0]
+        )
+
+        assert outcome.status == "ok"
+        assert outcome.row is not None
+        assert outcome.row.skip_reason is None
 
 
 class TestПараллелизм:

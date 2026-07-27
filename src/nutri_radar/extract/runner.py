@@ -46,7 +46,7 @@ from nutri_radar.errors import ExtractionError, LLMUnavailableError
 from nutri_radar.extract.corpus import CorpusItem
 from nutri_radar.extract.preprocess import PreprocessStats, prepare_text
 from nutri_radar.extract.prompts import Prompt, load_prompt
-from nutri_radar.extract.schemas import ExtractionResult
+from nutri_radar.extract.schemas import ExtractionResult, SkipReason
 from nutri_radar.llm.models import LLMResponse, TokenUsage
 from nutri_radar.llm.ports import StructuredLLM
 from nutri_radar.logging import safe_extra
@@ -188,12 +188,23 @@ def _to_row(
     prompt_version: str,
     usage: TokenUsage,
     latency_s: float,
+    truncated: bool = False,
 ) -> ExtractionRow:
     """Собрать строку БД из результата извлечения.
 
     Производные величины берутся из свойств модели, а не пересчитываются
     здесь: иначе появилось бы два места, где считается число форм сахара.
+
+    Разбор состоялся, но `unreadable` мог возникнуть двумя путями: ответ
+    упёрся в лимит вывода и список неполон, либо модель сама объявила состав
+    нечитаемым. Причины разные, и различать их нужно уже здесь.
     """
+    skip_reason: SkipReason | None = None
+    if truncated:
+        skip_reason = SkipReason.OUTPUT_LIMIT
+    elif extraction.unreadable:
+        skip_reason = SkipReason.MODEL_UNREADABLE
+
     return ExtractionRow(
         code=item.code,
         source_lang=item.lang,
@@ -203,6 +214,7 @@ def _to_row(
         ingredients_count=len(extraction.ingredients),
         allergens=extraction.allergens,
         unreadable=extraction.unreadable,
+        skip_reason=skip_reason,
         model_confidence=extraction.model_confidence,
         model_name=model_name,
         prompt_version=prompt_version,
@@ -217,6 +229,7 @@ def _unreadable_row(
     *,
     model_name: str,
     prompt_version: str,
+    skip_reason: SkipReason,
     usage: TokenUsage | None = None,
     latency_s: float | None = None,
 ) -> ExtractionRow:
@@ -228,6 +241,9 @@ def _unreadable_row(
     стоимость, иначе пересчёт цены прогона по таблице занизит её ровно
     на самых дорогих продуктах.
 
+    `skip_reason` обязателен: без него оба случая в таблице неразличимы,
+    а лечатся они разным — один размером контекста, другой лимитом вывода.
+
     Записывается намеренно: иначе такие продукты остались бы «необработанными»
     навсегда и каждый перезапуск снова упирался бы в них. Аналитика записи
     с `unreadable` не берёт (раздел 8 брифа), так что метрики не портятся.
@@ -237,6 +253,7 @@ def _unreadable_row(
         code=item.code,
         source_lang=item.lang,
         unreadable=True,
+        skip_reason=skip_reason,
         model_name=model_name,
         prompt_version=prompt_version,
         input_tokens=usage.input_tokens,
@@ -310,7 +327,12 @@ async def _extract_one(
         )
         return _Outcome(
             status="unreadable",
-            row=_unreadable_row(item, model_name=model_name, prompt_version=prompt.version),
+            row=_unreadable_row(
+                item,
+                model_name=model_name,
+                prompt_version=prompt.version,
+                skip_reason=SkipReason.TOO_LONG if prepared.too_long else SkipReason.EMPTY,
+            ),
         )
 
     rendered = prompt.render(prepared.cleaned, lang=item.lang)
@@ -349,6 +371,7 @@ async def _extract_one(
                     item,
                     model_name=model_name,
                     prompt_version=prompt.version,
+                    skip_reason=SkipReason.OUTPUT_LIMIT,
                     usage=usage,
                     latency_s=exc.latency_s,
                 ),
@@ -385,6 +408,7 @@ async def _extract_one(
         prompt_version=prompt.version,
         usage=response.usage,
         latency_s=response.latency_s,
+        truncated=response.truncated,
     )
     return _Outcome(
         status="unreadable" if extraction.unreadable else "ok",

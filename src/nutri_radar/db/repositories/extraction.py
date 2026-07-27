@@ -60,6 +60,9 @@ class ExtractionRow(BaseModel):
     allergens: list[str] = Field(default_factory=list)
 
     unreadable: bool = False
+    # Значения — из `SkipReason` слайса `extract`. Здесь строка: `db` не знает
+    # о стадиях пайплайна, иначе общий слой начнёт зависеть от слайса.
+    skip_reason: str | None = None
     model_confidence: float | None = None
 
     model_name: str

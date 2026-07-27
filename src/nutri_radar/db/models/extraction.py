@@ -22,6 +22,7 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -64,6 +65,10 @@ class ProductExtraction(Base):
 
     # Записи с unreadable=true не идут в аналитику (раздел 8 брифа).
     unreadable: Mapped[bool] = mapped_column(nullable=False, default=False)
+    # Почему разбор не состоялся. NULL — состоялся. Без этой колонки состав,
+    # не влезший в контекст, и состав, чей ответ не влез в лимит вывода,
+    # в таблице неразличимы, а лечатся они разным.
+    skip_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
     model_confidence: Mapped[float | None] = mapped_column(Numeric(4, 3), nullable=True)
 
     # --- чем разбирали ------------------------------------------------------
@@ -94,6 +99,14 @@ class ProductExtraction(Base):
         Index("ix_product_extraction_prompt_model", "prompt_version", "model_name"),
         # Отчёты M4 группируют по числу форм сахара.
         Index("ix_product_extraction_sugar_forms", "distinct_sugar_forms"),
+        # Частичный: причина есть только у пропусков, а их доля мала. Полный
+        # индекс по колонке, где почти везде NULL, — оплаченные страницы,
+        # которые никто не читает.
+        Index(
+            "ix_product_extraction_skip_reason",
+            "skip_reason",
+            postgresql_where=text("skip_reason IS NOT NULL"),
+        ),
     )
 
     def __repr__(self) -> str:
