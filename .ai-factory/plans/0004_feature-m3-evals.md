@@ -89,7 +89,7 @@ Rationale: план реализует ровно содержание пунк�
 
 ### Фаза 1: контракты
 
-- [ ] **Задача 1:** Адаптер Anthropic как реализация порта `StructuredLLM`.
+- [x] **Задача 1:** Адаптер Anthropic как реализация порта `StructuredLLM`.
       Structured outputs через `output_config.format`, зависимость `anthropic`
       в `pyproject.toml`. Развести модели: Sonnet 5 — без параметров
       сэмплирования и с явно выключенным мышлением; Haiku 4.5 — без `effort`.

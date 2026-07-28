@@ -16,6 +16,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 
+import anthropic
 import httpx
 import typer
 
@@ -41,6 +42,7 @@ from nutri_radar.extract.normalize import (
 from nutri_radar.extract.prompts import available_versions
 from nutri_radar.extract.runner import ExtractionRunResult, format_result, run_extraction
 from nutri_radar.extract.schemas import Ingredient
+from nutri_radar.llm.adapters.anthropic import AnthropicLLM
 from nutri_radar.llm.adapters.ollama import OllamaLLM
 from nutri_radar.llm.ports import StructuredLLM
 
@@ -82,12 +84,20 @@ def build_llm(settings: Settings, client: httpx.AsyncClient) -> StructuredLLM:
         case "ollama":
             return OllamaLLM(client, settings.ollama)
         case "anthropic":
-            # Облачный адаптер появляется на M3 — там он нужен как эталон
-            # в evals. Отказ явный: молча уехать на Ollama значит получить
-            # результаты не той модели, чем помечен прогон.
-            raise ConfigurationError(
-                "Адаптер Anthropic ещё не реализован (появится на M3). "
-                "Поставьте LLM__PROVIDER=ollama."
+            # Ключ проверяем здесь, а не внутри адаптера: composition root —
+            # единственное место, которое знает про выбор провайдера, и отказ
+            # должен быть понятным до первого запроса, а не на сотом продукте.
+            if settings.anthropic.api_key is None:
+                raise ConfigurationError(
+                    "LLM__PROVIDER=anthropic, но ANTHROPIC__API_KEY не задан. "
+                    "Укажите ключ в .env или переключитесь на LLM__PROVIDER=ollama."
+                )
+            return AnthropicLLM(
+                anthropic.AsyncAnthropic(
+                    api_key=settings.anthropic.api_key.get_secret_value(),
+                    timeout=settings.anthropic.timeout_s,
+                ),
+                settings.anthropic,
             )
         case unknown:
             raise ConfigurationError(f"Неизвестный провайдер LLM: {unknown}")

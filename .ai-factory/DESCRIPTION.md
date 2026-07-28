@@ -70,7 +70,7 @@
 | CLI | Typer (ADR-011) |
 | ML | pandas, scikit-learn, matplotlib |
 | LLM массовый прогон | `qwen2.5:3b-instruct-q4_K_M` через Ollama, генерация по JSON-схеме |
-| LLM агент и эталон evals | **Anthropic Claude** (Sonnet 5 для агента, он же эталон; Haiku 4.5 для дешёвых массовых прогонов) |
+| LLM агент и эталон evals | **Anthropic Claude** (Sonnet 5 для агента, он же эталон; Haiku 4.5 для дешёвых массовых прогонов) через SDK `anthropic`, структурированный вывод по `output_config.format` |
 | Переключение провайдеров | один тонкий адаптер, выбор через `.env` |
 | Эмбеддинги | `bge-m3` локально через Ollama, 1024 измерения, мультиязычная |
 | Бот | aiogram 3 |
