@@ -9,21 +9,34 @@ import asyncio
 import logging
 from collections import Counter
 from collections.abc import Awaitable, Callable
+from functools import partial
+from pathlib import Path
 
+import anthropic
 import typer
 
 from nutri_radar.config import get_settings
 from nutri_radar.db.session import dispose_engine
 from nutri_radar.evals.annotate import annotate_session
+from nutri_radar.evals.compare import (
+    OFF_SYSTEM,
+    collect_cloud_predictions,
+    collect_local_predictions,
+    collect_off_predictions,
+)
 from nutri_radar.evals.sample import select_sample
 from nutri_radar.evals.schemas import (
     GOLD_FILE,
     SAMPLE_FILE,
     GoldRecord,
+    PredictionRecord,
     SampleItem,
+    predictions_path,
     read_jsonl,
     write_jsonl,
 )
+from nutri_radar.extract.prompts import load_prompt
+from nutri_radar.llm.adapters.anthropic import AnthropicLLM
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +57,11 @@ def _run[T](coro_factory: Callable[[], Awaitable[T]]) -> T:
             await dispose_engine()
 
     return asyncio.run(_main())
+
+
+def _save_predictions(system: str, predictions: list[PredictionRecord]) -> int:
+    """Записать предсказания одной системы. Возвращает число строк."""
+    return write_jsonl(predictions_path(system), predictions)
 
 
 @app.command()
@@ -74,7 +92,9 @@ def sample(
     write_jsonl(SAMPLE_FILE, items)
 
     by_lang = Counter(item.lang for item in items)
-    typer.echo(f"Отобрано {len(items)} продуктов → {SAMPLE_FILE}")
+    # Стрелка только ASCII: символа U+2192 нет в cp1251, и на консоли Windows
+    # вывод падает с UnicodeEncodeError — кириллица и тире там есть, а он нет.
+    typer.echo(f"Отобрано {len(items)} продуктов -> {SAMPLE_FILE}")
     for lang, count in sorted(by_lang.items()):
         typer.echo(f"  {lang}: {count}")
 
@@ -104,6 +124,71 @@ def annotate(
     typer.echo(
         f"\nРазмечено за сессию: {added}. Всего в эталоне: {len(read_jsonl(GOLD_FILE, GoldRecord))}"
     )
+
+
+@app.command()
+def predict(
+    system: str = typer.Option(
+        "off,local",
+        "--system",
+        help="Какие системы прогнать: off, local, cloud (через запятую).",
+    ),
+    dump: str = typer.Option(
+        "", "--dump", help="Дамп OFF для baseline парсера; пусто — INGEST__DATA_DIR."
+    ),
+) -> None:
+    """Собрать предсказания систем по выборке.
+
+    Каждая система пишется отдельным файлом в `data/evals/predictions/`.
+    Файлы коммитятся: на них работает гейт в CI, которому нельзя ни GPU,
+    ни базы, ни сети.
+    """
+    settings = get_settings()
+    sample_items = read_jsonl(SAMPLE_FILE, SampleItem)
+    if not sample_items:
+        typer.echo("Выборка не собрана. Начните с `nutri-radar evals sample`.")
+        raise typer.Exit(code=1)
+
+    wanted = {part.strip().lower() for part in system.split(",") if part.strip()}
+    written: list[tuple[str, int]] = []
+
+    if "off" in wanted:
+        dump_path = Path(dump) if dump else settings.ingest.dump_path
+        predictions = collect_off_predictions(sample_items, dump_path)
+        written.append((OFF_SYSTEM, _save_predictions(OFF_SYSTEM, predictions)))
+
+    if "local" in wanted:
+        predictions = _run(partial(collect_local_predictions, sample_items, settings))
+        written.append(
+            (settings.ollama.model, _save_predictions(settings.ollama.model, predictions))
+        )
+
+    if "cloud" in wanted:
+        if settings.anthropic.api_key is None:
+            # Отказ явный и до прогона: облачные вызовы стоят денег, и молча
+            # пропустить систему значит получить сравнение трёх систем там,
+            # где отчёт обещает четыре.
+            typer.echo(
+                "ANTHROPIC__API_KEY не задан — облачные системы прогнать нельзя.\n"
+                "Укажите ключ в .env или уберите `cloud` из --system."
+            )
+            raise typer.Exit(code=1)
+        prompt = load_prompt(settings.extract.prompt_version)
+        for model in (settings.anthropic.model, settings.anthropic.cheap_model):
+            llm = AnthropicLLM(
+                anthropic.AsyncAnthropic(
+                    api_key=settings.anthropic.api_key.get_secret_value(),
+                    timeout=settings.anthropic.timeout_s,
+                ),
+                settings.anthropic.model_copy(update={"model": model}),
+            )
+            predictions = _run(
+                partial(collect_cloud_predictions, sample_items, llm, prompt, settings)
+            )
+            written.append((model, _save_predictions(model, predictions)))
+
+    for name, count in written:
+        typer.echo(f"{name}: {count} предсказаний -> {predictions_path(name)}")
 
 
 @app.command()

@@ -101,6 +101,16 @@ class PredictionRecord(BaseModel):
     latency_s: float = 0.0
 
 
+def predictions_path(system: str) -> Path:
+    """Файл предсказаний одной системы.
+
+    Имя модели попадает в путь, поэтому двоеточие и слеши заменяются:
+    `qwen2.5:3b-instruct-q4_K_M` иначе не станет именем файла на Windows.
+    """
+    safe = system.replace(":", "_").replace("/", "_")
+    return PREDICTIONS_DIR / f"{safe}.jsonl"
+
+
 def write_jsonl(path: Path, records: Iterable[BaseModel]) -> int:
     """Записать записи в JSONL. Возвращает число строк.
 
