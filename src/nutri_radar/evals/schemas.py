@@ -79,6 +79,28 @@ class GoldRecord(BaseModel):
         return self.extraction.distinct_sugar_forms
 
 
+class PredictionRecord(BaseModel):
+    """Что одна система ответила по одному продукту.
+
+    Формат общий для всех четырёх систем — парсера OFF, локальной модели
+    и двух облачных. Иначе сравнение пришлось бы писать под каждую отдельно,
+    и разница в коде выглядела бы как разница в качестве.
+    """
+
+    code: str
+    # Человекочитаемое имя системы: `off-parser`, `qwen2.5:3b`, `claude-haiku-4-5`.
+    # Оно уходит в заголовки таблицы сравнения.
+    system: str
+    extraction: ExtractionResult
+
+    # Стоимость и время — часть сравнения, а не приложение к нему. Система,
+    # которая на пункт лучше и в сто раз дороже, — это другой ответ на вопрос
+    # «что брать», чем система, которая лучше и дешевле.
+    input_tokens: int = 0
+    output_tokens: int = 0
+    latency_s: float = 0.0
+
+
 def write_jsonl(path: Path, records: Iterable[BaseModel]) -> int:
     """Записать записи в JSONL. Возвращает число строк.
 
