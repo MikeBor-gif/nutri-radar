@@ -327,6 +327,33 @@ class LLMSettings(BaseSettings):
     provider: LLMProvider = "ollama"
 
 
+class EvalsSettings(BaseSettings):
+    """Оценка качества: эталон, метрики, гейт."""
+
+    model_config = SettingsConfigDict(env_prefix="EVALS__", env_file=_ENV_FILE, extra="ignore")
+
+    # Сколько продуктов размечает человек. Согласовано отдельно: по 20 на каждый
+    # из пяти языков. Меньше 20 на язык не даёт судить о разнице между языками —
+    # а это один из двух вопросов, ради которых майлстоун и существует.
+    gold_size: int = 100
+
+    # Свой seed, а не общий с `extract`: смена seed отбора корпуса не должна
+    # переставлять эталонную выборку, иначе размеченное перестанет совпадать
+    # с тем, что размечали.
+    random_seed: int = 20260728
+
+    # Насколько может просесть F1, прежде чем гейт уронит сборку. В пунктах.
+    # Значение из раздела «Ограничения» спецификации.
+    max_f1_drop: float = 3.0
+
+    @field_validator("gold_size")
+    @classmethod
+    def _validate_gold_size(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError(f"gold_size={value} должен быть > 0")
+        return value
+
+
 class Settings(BaseSettings):
     """Корневые настройки. Получать только через `get_settings()`."""
 
@@ -338,6 +365,7 @@ class Settings(BaseSettings):
     anthropic: AnthropicSettings = Field(default_factory=AnthropicSettings)
     ingest: IngestSettings = Field(default_factory=IngestSettings)
     extract: ExtractSettings = Field(default_factory=ExtractSettings)
+    evals: EvalsSettings = Field(default_factory=EvalsSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
 
     def secret_values(self) -> frozenset[str]:

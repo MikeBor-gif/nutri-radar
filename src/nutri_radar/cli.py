@@ -15,6 +15,7 @@ import logging
 import typer
 
 from nutri_radar import __version__
+from nutri_radar.evals import cli as evals_cli
 from nutri_radar.extract import cli as extract_cli
 from nutri_radar.health import CheckStatus, run_health_check
 from nutri_radar.ingest import cli as ingest_cli
@@ -32,6 +33,7 @@ app = typer.Typer(
 # Слайсы пайплайна подключаются здесь по мере появления.
 app.add_typer(ingest_cli.app, name="ingest")
 app.add_typer(extract_cli.app, name="extract")
+app.add_typer(evals_cli.app, name="evals")
 
 
 @app.callback()
