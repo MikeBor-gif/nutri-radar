@@ -12,7 +12,14 @@
 /data/*
 !/data/evals/
 /data/evals/*
-!/data/evals/gold.jsonl
+# Эталон, состав выборки и предсказания систем идут в репозиторий намеренно:
+# гейт evals обязан пересчитывать метрики в CI без GPU и без БД, а значит
+# должен видеть оба файла. Заодно правка метки становится видна в diff.
+!/data/evals/README.md
+!/data/evals/extraction_gold.jsonl
+!/data/evals/sample.jsonl
+!/data/evals/baseline.json
+!/data/evals/predictions/
 # Словари ингредиентов — тоже рукописные данные, а не выгрузка: без них
 # канонизация имён не работает, и число форм сахара считается неверно.
 !/data/dictionaries/
