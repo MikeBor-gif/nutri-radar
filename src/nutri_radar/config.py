@@ -93,8 +93,12 @@ class OllamaSettings(BaseSettings):
     # загрузку модели извлечения и модели эмбеддингов.
     keep_alive: str = "5m"
     timeout_s: float = 120.0
-    # Неограниченный веер запросов положит GPU. Параллелизм — из конфига.
-    max_concurrency: int = 2
+    # Единица — не осторожность, а измерение. A/B на одних и тех же 40 продуктах:
+    # с параллелизмом 2 прогон занял 838 с, с параллелизмом 1 — 817 с. Ускорения
+    # нет: на 6 ГБ VRAM модель занимает GPU целиком, и второй запрос ждёт
+    # очереди, зато удваивает пиковое потребление памяти. Параметр остаётся
+    # в конфиге — на другом железе выигрыш может появиться (ADR-017).
+    max_concurrency: int = 1
 
     @field_validator("num_ctx")
     @classmethod
@@ -227,6 +231,94 @@ class IngestSettings(BaseSettings):
         return self.data_dir / "food.parquet"
 
 
+class ExtractSettings(BaseSettings):
+    """Параметры извлечения структуры состава (M2)."""
+
+    model_config = SettingsConfigDict(env_prefix="EXTRACT__", env_file=_ENV_FILE, extra="ignore")
+
+    # Версия промпта для прогона. Уезжает в product_extraction рядом
+    # с результатом: без неё сравнение версий в M3 невозможно.
+    prompt_version: str = "v3"
+
+    # Целевой размер LLM-корпуса. Бриф просил 3-5 тысяч, но замер показал
+    # 20,4 с на продукт вместо ожидавшихся 2,5-10,5: 3000 продуктов — это
+    # 12-17 часов, втрое выше порога max_run_hours. Сужено до 1200 по факту
+    # измерения, как и предписывает таблица рисков плана M2. Квоты по языкам
+    # сохраняются (~240 на язык), для метрик M3 этого достаточно (ADR-017).
+    corpus_size: int = 1200
+
+    # Доля корпуса со смещением в unknown_ingredients_n > 0 (ADR-006):
+    # туда, где парсер OFF не справился. Остальное — контрольная случайная
+    # часть, без неё нельзя честно показать поведение на лёгких случаях.
+    unknown_share: float = 0.7
+
+    # Детерминированность выборки. Повторный запуск обязан дать ТУ ЖЕ
+    # выборку, иначе сравнение версий промптов пойдёт по разным продуктам.
+    random_seed: int = 42
+
+    # Доля невалидных ответов, выше которой запускать полный прогон нельзя.
+    max_invalid_share: float = 0.1
+
+    # Порог экстраполяции замера: дольше — повод сузить корпус, а не ждать.
+    max_run_hours: float = 6.0
+
+    # Размер выборки для замера. Раздел 3a брифа: замер на 20 продуктах перед
+    # полным прогоном. Выборка берётся с начала отобранного корпуса, поэтому
+    # все версии промпта меряются на ОДНИХ И ТЕХ ЖЕ продуктах.
+    benchmark_size: int = 20
+
+    # Сколько неизвестных имён показывает `extract dict unknown`.
+    unknown_report_top: int = 50
+
+    # Размер батча прогона. Результаты уходят в БД после каждого батча,
+    # поэтому Ctrl+C стоит не больше одного батча работы. Больше батч —
+    # реже транзакции, но дороже обрыв.
+    batch_size: int = 50
+
+    # Ретраи ТОЛЬКО на недоступности модели (LLMUnavailableError). Невалидный
+    # разбор не ретраится: при temperature=0 повтор даст тот же ответ, и прогон
+    # встанет на месте.
+    max_retries: int = 3
+    retry_backoff_s: float = 2.0
+
+    # Столько отказов модели подряд означают, что Ollama упала, а не что
+    # попался трудный состав. Продолжать бессмысленно: прогон останавливается,
+    # уже записанное сохраняется, перезапуск продолжит с этого места.
+    max_consecutive_failures: int = 10
+
+    @field_validator("unknown_share")
+    @classmethod
+    def _validate_share(cls, value: float) -> float:
+        if not 0.0 <= value <= 1.0:
+            raise ValueError(f"unknown_share={value} должна быть в диапазоне 0..1")
+        return value
+
+    @field_validator("corpus_size")
+    @classmethod
+    def _validate_corpus_size(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError(f"corpus_size={value} должен быть >= 1")
+        return value
+
+    @field_validator("batch_size")
+    @classmethod
+    def _validate_batch_size(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError(f"batch_size={value} должен быть >= 1")
+        return value
+
+    @field_validator("max_retries")
+    @classmethod
+    def _validate_max_retries(cls, value: int) -> int:
+        # Ноль означал бы «ни одной попытки», а не «без ретраев»: первая
+        # попытка — это тоже попытка.
+        if value < 1:
+            raise ValueError(
+                f"max_retries={value} должен быть >= 1 (первая попытка тоже считается)"
+            )
+        return value
+
+
 class LLMSettings(BaseSettings):
     """Выбор провайдера. По нему composition root подставляет адаптер."""
 
@@ -245,6 +337,7 @@ class Settings(BaseSettings):
     ollama: OllamaSettings = Field(default_factory=OllamaSettings)
     anthropic: AnthropicSettings = Field(default_factory=AnthropicSettings)
     ingest: IngestSettings = Field(default_factory=IngestSettings)
+    extract: ExtractSettings = Field(default_factory=ExtractSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
 
     def secret_values(self) -> frozenset[str]:
@@ -275,6 +368,8 @@ class Settings(BaseSettings):
             "ingest_languages": self.ingest.languages,
             "ingest_categories_count": len(self.ingest.category_tags),
             "ingest_batch_size": self.ingest.batch_size,
+            "prompt_version": self.extract.prompt_version,
+            "corpus_size": self.extract.corpus_size,
         }
 
 

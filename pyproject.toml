@@ -38,6 +38,9 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/nutri_radar"]
+# Шаблоны промптов — данные пакета, а не код: без этого они не попадут
+# в собранный wheel и версия промпта не загрузится в контейнере.
+artifacts = ["src/nutri_radar/extract/prompts/*.md"]
 
 # =============================================================================
 # ruff
