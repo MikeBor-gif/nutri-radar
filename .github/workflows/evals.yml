@@ -1,0 +1,104 @@
+# Гейт качества извлечения (ADR-008, M3).
+#
+# Смысл в том, чего здесь НЕТ: ни базы, ни Ollama, ни GPU, ни ключей API.
+# Гейт пересчитывает метрики из закоммиченных файлов — эталона, предсказаний
+# и базлайна — и потому детерминирован. Он не может покраснеть от разброса
+# между прогонами модели (ADR-018): красный гейт означает, что изменился код.
+#
+# Полный прогон с облачной моделью вынесен в отдельную задачу по кнопке:
+# он стоит денег, и платить за каждый push незачем.
+
+name: Evals
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      refresh_cloud:
+        description: "Перепрогнать облачные модели и обновить предсказания"
+        type: boolean
+        default: false
+
+concurrency:
+  group: evals-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: Гейт метрик
+    runs-on: ubuntu-latest
+
+    env:
+      LOG_LEVEL: INFO
+      ENVIRONMENT: ci
+      JSON_LOGS: "true"
+      # Порог просадки — из спецификации, раздел «Ограничения».
+      EVALS__MAX_F1_DROP: "3.0"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Установить uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Установить Python 3.12
+        run: uv python install 3.12
+
+      - name: Синхронизировать зависимости
+        run: uv sync --frozen
+
+      - name: Гейт качества
+        # Падает с кодом 1 при просадке F1 больше порога. Пропускается, пока
+        # эталон не размечен или базлайн не зафиксирован: держать сборку
+        # красной из-за незаконченной ручной работы значит приучить всех
+        # на неё не смотреть.
+        run: uv run nutri-radar evals gate
+
+  cloud-refresh:
+    name: Перепрогон облачных моделей
+    # Только по кнопке и только при явно поставленном флаге: каждый запуск
+    # тратит деньги на вызовы API.
+    if: github.event_name == 'workflow_dispatch' && inputs.refresh_cloud
+    runs-on: ubuntu-latest
+
+    env:
+      LOG_LEVEL: INFO
+      ENVIRONMENT: ci
+      JSON_LOGS: "true"
+      ANTHROPIC__API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Установить uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Установить Python 3.12
+        run: uv python install 3.12
+
+      - name: Синхронизировать зависимости
+        run: uv sync --frozen
+
+      - name: Прогон облачных моделей
+        # Дампа и базы в CI нет, поэтому только облачные системы: предсказания
+        # парсера OFF и локальной модели уже лежат в репозитории.
+        run: uv run nutri-radar evals predict --system cloud
+
+      - name: Показать расхождение
+        run: git --no-pager diff --stat data/evals/predictions/
+
+      - name: Приложить обновлённые предсказания
+        # Не коммитим сами: обновление предсказаний меняет числа майлстоуна,
+        # и такое изменение проходит через ревью, а не через бота.
+        uses: actions/upload-artifact@v4
+        with:
+          name: cloud-predictions
+          path: data/evals/predictions/

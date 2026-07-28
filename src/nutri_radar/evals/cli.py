@@ -24,9 +24,17 @@ from nutri_radar.evals.compare import (
     collect_local_predictions,
     collect_off_predictions,
 )
+from nutri_radar.evals.gate import (
+    collect_current,
+    format_gate,
+    metrics_snapshot,
+    run_gate,
+    write_baseline,
+)
 from nutri_radar.evals.sample import select_sample
 from nutri_radar.evals.schemas import (
     GOLD_FILE,
+    PREDICTIONS_DIR,
     SAMPLE_FILE,
     GoldRecord,
     PredictionRecord,
@@ -189,6 +197,45 @@ def predict(
 
     for name, count in written:
         typer.echo(f"{name}: {count} предсказаний -> {predictions_path(name)}")
+
+
+@app.command()
+def gate() -> None:
+    """Проверить, не просели ли метрики против базлайна.
+
+    Работает без GPU, без БД и без сети — только файлы из репозитория.
+    Выход с кодом 1 при просадке: это точка входа для CI.
+    """
+    settings = get_settings()
+    result = run_gate(settings)
+    typer.echo(format_gate(result, settings.evals.max_f1_drop))
+    if not result.passed:
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def baseline() -> None:
+    """Зафиксировать текущие метрики как базлайн для гейта.
+
+    Отдельная команда, а не автообновление: базлайн, который переписывается
+    сам, не сторожит ничего — любая просадка молча стала бы новой нормой.
+    """
+    gold = read_jsonl(GOLD_FILE, GoldRecord)
+    if not gold:
+        typer.echo("Эталон пуст — фиксировать нечего. Сначала разметьте продукты.")
+        raise typer.Exit(code=1)
+
+    results = collect_current(gold, PREDICTIONS_DIR)
+    if not results:
+        typer.echo("Нет предсказаний. Сначала соберите их: `nutri-radar evals predict`.")
+        raise typer.Exit(code=1)
+
+    snapshot = {system: metrics_snapshot(result) for system, result in results.items()}
+    path = write_baseline(snapshot)
+    typer.echo(f"Базлайн зафиксирован для {len(snapshot)} систем -> {path}")
+    for system, metrics in sorted(snapshot.items()):
+        values = ", ".join(f"{k} {v:.3f}" for k, v in sorted(metrics.items()))
+        typer.echo(f"  {system}: {values}")
 
 
 @app.command()
