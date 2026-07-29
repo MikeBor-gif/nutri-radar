@@ -75,7 +75,7 @@ nutri-radar/
 │   │   ├── load.py            ✓   батчевая заливка, дельты, журнал прогонов
 │   │   └── sources/           ✓   адаптеры parquet и delta
 │   ├── extract/               — СЛАЙС: схемы, промпты, формы сахара (M2)
-│   ├── evals/                 — СЛАЙС: разметка, метрики, гейт для CI (M3)
+│   ├── evals/                 — СЛАЙС: разметка, метрики, отчёт, гейт для CI (M3)
 │   ├── analytics/             — СЛАЙС: classic ML на метках из базы (M4)
 │   ├── retrieval/             — СЛАЙС: эмбеддинги, pgvector, RAG (M5)
 │   ├── agent/                 — СЛАЙС: инструменты и цикл агента (M6)
@@ -89,7 +89,7 @@ nutri-radar/
 │   └── test_logging.py        ✓ вычищение секретов, форматтеры
 ├── notebooks/                 — только разведка, не продакшн-код
 ├── reports/                   — графики и отчёты evals
-└── data/                      — gitignored, кроме data/evals/gold.jsonl
+└── data/                      — gitignored, кроме data/evals/ и data/dictionaries/
 ```
 
 Ключевое правило зависимостей: точки входа → слайсы → общее. Слайсы **не зависят
@@ -111,7 +111,7 @@ nutri-radar/
 | `alembic/versions/` | история схемы БД |
 | `src/nutri_radar/extract/schemas.py` | *(M2)* Pydantic-схема выхода LLM = JSON-схема генерации |
 | `src/nutri_radar/llm/ports.py` | *(M2)* порты внешних моделей; точка подмены провайдера |
-| `data/evals/gold.jsonl` | *(M3)* эталонная разметка; **создаётся только человеком** |
+| `data/evals/extraction_gold.jsonl` | *(M3)* эталонная разметка; **создаётся только человеком** |
 
 ## Документация
 

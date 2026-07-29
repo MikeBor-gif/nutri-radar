@@ -1,6 +1,7 @@
-"""CLI слайса `evals`: выборка, разметка, статус.
+"""CLI слайса `evals`: выборка, разметка, предсказания, метрики, гейт, отчёт.
 
-Composition root слайса. Метрики и гейт добавятся здесь же по мере готовности.
+Composition root слайса: собирает зависимости и форматирует вывод, логики
+не содержит.
 """
 
 from __future__ import annotations
@@ -31,6 +32,7 @@ from nutri_radar.evals.gate import (
     run_gate,
     write_baseline,
 )
+from nutri_radar.evals.report import build_report, read_all_predictions, write_report
 from nutri_radar.evals.sample import select_sample
 from nutri_radar.evals.schemas import (
     GOLD_FILE,
@@ -43,6 +45,7 @@ from nutri_radar.evals.schemas import (
     read_jsonl,
     write_jsonl,
 )
+from nutri_radar.extract.normalize import load_seed_index
 from nutri_radar.extract.prompts import load_prompt
 from nutri_radar.llm.adapters.anthropic import AnthropicLLM
 
@@ -211,6 +214,29 @@ def gate() -> None:
     typer.echo(format_gate(result, settings.evals.max_f1_drop))
     if not result.passed:
         raise typer.Exit(code=1)
+
+
+@app.command()
+def report(
+    out: str = typer.Option("", "--out", help="Куда писать отчёт; пусто — reports/ с датой."),
+    save: bool = typer.Option(True, "--save/--no-save", help="Писать файл или только в консоль."),
+) -> None:
+    """Собрать отчёт приёмки: таблица сравнения и материал для вопросов M2.
+
+    Работает по тем же файлам, что и гейт: эталон, предсказания, словарь.
+    Ни GPU, ни базы, ни сети — отчёт пересобирается одной командой из того,
+    что лежит в репозитории.
+    """
+    settings = get_settings()
+    gold = read_jsonl(GOLD_FILE, GoldRecord)
+    predictions_by_system = read_all_predictions(PREDICTIONS_DIR)
+
+    text = build_report(gold, predictions_by_system, load_seed_index(), settings)
+    typer.echo(text)
+
+    if save:
+        path = write_report(text, Path(out) if out else None)
+        typer.echo(f"\nОтчёт записан -> {path}")
 
 
 @app.command()
