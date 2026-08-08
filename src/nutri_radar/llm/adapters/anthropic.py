@@ -16,6 +16,9 @@
    а «мышление» включено по умолчанию и делит бюджет `max_tokens` с ответом —
    для извлечения состава его гасим явно. У Haiku 4.5 наоборот: параметра
    `effort` нет вовсе, а отсутствие поля `thinking` уже означает «не думать».
+   У семейства Fable третий случай: мышление не выключается совсем, и явный
+   `thinking: disabled` там вернёт 400 — поле не отправляется. Одним флагом
+   «умеет думать» эти три случая не описываются, поэтому в коде два списка.
 """
 
 from __future__ import annotations
@@ -59,13 +62,14 @@ _UNSUPPORTED_SCHEMA_KEYS = frozenset(
     }
 )
 
-# Модели, у которых «мышление» включено по умолчанию и гасится явным
-# `thinking: disabled`, а `effort` поддерживается. Это факт внешнего API,
-# а не настройка проекта: у моделей вне списка (Haiku 4.5) `effort` возвращает
-# ошибку, а отсутствие поля `thinking` уже означает «не думать».
-_ADAPTIVE_THINKING_MODELS = (
-    "claude-fable-5",
-    "claude-mythos-5",
+# Поведение «мышления» у Claude делится на три случая, и это факт внешнего
+# API, а не настройка проекта. Держать их одним списком нельзя: параметр,
+# уместный в одном случае, в другом возвращает 400.
+#
+# 1. Гасится явно — модели ниже. Мышление у них включено по умолчанию и делит
+#    бюджет `max_tokens` с ответом, поэтому для извлечения состава мы шлём
+#    `thinking: disabled` (ADR-019: обрезанный JSON — та беда, которую чиним).
+_THINKING_DISABLED_MODELS = (
     "claude-opus-5",
     "claude-opus-4-8",
     "claude-opus-4-7",
@@ -73,6 +77,19 @@ _ADAPTIVE_THINKING_MODELS = (
     "claude-sonnet-5",
     "claude-sonnet-4-6",
 )
+
+# 2. Не выключается вовсе. У семейства Fable мышление всегда включено, и явный
+#    `thinking: disabled` возвращает 400 — параметр нужно не передавать.
+#    Бюджет `max_tokens` эти модели делят между мышлением и ответом, так что
+#    лимит вывода им нужен с запасом; предупреждаем об этом при создании.
+_ALWAYS_THINKING_MODELS = (
+    "claude-fable-5",
+    "claude-mythos-5",
+)
+
+# 3. Мышления нет (Haiku 4.5 и старше). Отсутствие поля `thinking` уже
+#    означает «не думать», а параметра `effort` у них нет вовсе — он вернёт
+#    ошибку. Отдельного списка не требуется: это поведение по умолчанию.
 
 
 class AnthropicLLM:
@@ -87,17 +104,30 @@ class AnthropicLLM:
                 "model": settings.model,
                 "max_output_tokens": settings.max_output_tokens,
                 "timeout_s": settings.timeout_s,
-                "adaptive_thinking": self._has_adaptive_thinking,
+                "thinking_disabled": self._thinking_disabled,
             },
         )
+        if self._always_thinking:
+            # Не ошибка конфигурации, а предупреждение: модель рабочая, но
+            # погасить мышление у неё нельзя, и лимит вывода делится на двоих.
+            logger.warning(
+                "У модели мышление не выключается — лимит вывода делится с ответом",
+                extra=safe_extra(
+                    model=settings.model, max_output_tokens=settings.max_output_tokens
+                ),
+            )
 
     @property
     def model_name(self) -> str:
         return self._settings.model
 
     @property
-    def _has_adaptive_thinking(self) -> bool:
-        return self._settings.model.startswith(_ADAPTIVE_THINKING_MODELS)
+    def _thinking_disabled(self) -> bool:
+        return self._settings.model.startswith(_THINKING_DISABLED_MODELS)
+
+    @property
+    def _always_thinking(self) -> bool:
+        return self._settings.model.startswith(_ALWAYS_THINKING_MODELS)
 
     async def generate(
         self,
@@ -121,8 +151,9 @@ class AnthropicLLM:
         # Извлечение состава — задача на аккуратность, а не на рассуждение.
         # Мышление тут только съедает бюджет `max_tokens`, деля его с ответом,
         # и рискует обрезать список ингредиентов — ровно та беда, которую
-        # разбирает ADR-019.
-        if self._has_adaptive_thinking:
+        # разбирает ADR-019. Где мышление не выключается (семейство Fable),
+        # поле не отправляется вовсе: явный `disabled` там вернёт 400.
+        if self._thinking_disabled:
             payload["thinking"] = {"type": "disabled"}
 
         # Температуру не передаём сознательно: у поколения Sonnet 5 любой

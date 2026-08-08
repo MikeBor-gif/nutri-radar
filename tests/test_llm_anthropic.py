@@ -34,6 +34,8 @@ LIMIT = 2048
 
 SONNET = "claude-sonnet-5"
 HAIKU = "claude-haiku-4-5-20251001"
+# Третий случай «мышления»: выключить его нельзя, явный disabled вернёт 400.
+FABLE = "claude-fable-5"
 
 GOOD_CONTENT = json.dumps(
     {
@@ -212,6 +214,35 @@ class TestPayload:
         await adapter.generate("состав", json_schema={"type": "object"})
 
         assert "thinking" not in client.messages.calls[0]
+
+    async def test_у_fable_thinking_не_отправляется(self):
+        """Мышление у семейства Fable не выключается: явный disabled — это 400.
+
+        Отдельный случай от Haiku: там поля нет, потому что думать нечем,
+        здесь — потому что запретить думать нельзя. Один список моделей
+        эти два случая не различал бы и слал бы недопустимый параметр.
+        """
+        adapter, client = _with_client(_message(GOOD_CONTENT), model=FABLE)
+
+        await adapter.generate("состав", json_schema={"type": "object"})
+
+        assert "thinking" not in client.messages.calls[0]
+
+    async def test_у_fable_лимит_вывода_поднимает_предупреждение(
+        self, caplog: pytest.LogCaptureFixture
+    ):
+        """Бюджет max_tokens там делится с мышлением — это должно быть видно."""
+        with caplog.at_level("WARNING", logger="nutri_radar.llm.adapters.anthropic"):
+            _with_client(_message(GOOD_CONTENT), model=FABLE)
+
+        assert any("мышление не выключается" in record.message for record in caplog.records)
+
+    async def test_у_sonnet_предупреждения_нет(self, caplog: pytest.LogCaptureFixture):
+        """Иначе предупреждение обесценится: оно про исключение, а не про норму."""
+        with caplog.at_level("WARNING", logger="nutri_radar.llm.adapters.anthropic"):
+            _with_client(_message(GOOD_CONTENT), model=SONNET)
+
+        assert not [r for r in caplog.records if "мышление не выключается" in r.message]
 
     async def test_схема_уходит_в_output_config(self):
         adapter, client = _with_client(_message(GOOD_CONTENT))
