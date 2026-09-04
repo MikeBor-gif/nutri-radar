@@ -112,14 +112,14 @@ b 4 896. **Baseline большинства класса — 44,3%** (всегд�
 
 ### Фаза 1: данные
 
-- [ ] **Задача 1:** Зависимости и каркас слайса. `scikit-learn`, `pandas`,
+- [x] **Задача 1:** Зависимости и каркас слайса. `scikit-learn`, `pandas`,
       `matplotlib` в `pyproject.toml` — все три объявлены в стеке брифа,
       отдельного согласования не требуют (правило 7 закрыто заранее).
       Каркас `analytics/` по `ARCHITECTURE.md`: `features.py`, `tasks/`,
       `report.py`, `cli.py`. Подключение под-приложения в корневой CLI.
       Файлы: `pyproject.toml`, `src/nutri_radar/analytics/__init__.py`,
       `src/nutri_radar/analytics/cli.py`, `src/nutri_radar/cli.py`
-- [ ] **Задача 2:** Выгрузка датасета и стратифицированный сплит.
+- [x] **Задача 2:** Выгрузка датасета и стратифицированный сплит.
       Читает из `products` только `code`, `ingredients_text`,
       `ingredients_text_lang`, `nutriscore_grade`, `nova_group` — ничего
       из нутриентов, чтобы утечка была невозможна по построению, а не

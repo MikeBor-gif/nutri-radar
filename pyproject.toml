@@ -20,6 +20,11 @@ dependencies = [
     "typer>=0.15",
     "duckdb>=1.5.5",
     "anthropic>=0.120.0",
+    # M4: classic ML. Все три объявлены в стеке брифа, отдельного
+    # согласования не требуют (правило 7).
+    "scikit-learn>=1.6",
+    "pandas>=2.2",
+    "matplotlib>=3.10",
 ]
 
 [project.scripts]

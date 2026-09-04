@@ -361,6 +361,48 @@ class EvalsSettings(BaseSettings):
         return value
 
 
+class AnalyticsSettings(BaseSettings):
+    """Аналитика M4: предсказание оценки качества по тексту состава."""
+
+    model_config = SettingsConfigDict(env_prefix="ANALYTICS__", env_file=_ENV_FILE, extra="ignore")
+
+    # Свой seed, а не общий с `extract` и `evals`: смена seed отбора корпуса
+    # не должна переставлять train/test, иначе числа двух прогонов посчитаны
+    # на разных сплитах и сравнивать их нельзя.
+    random_seed: int = 20260905
+
+    # Доля теста. 20% от 131 тысячи — 26 тысяч продуктов, с запасом хватает
+    # даже для редкого класса «b» (4896 всего → около 980 в тесте).
+    test_size: float = 0.2
+
+    # Минимальная длина состава. Строки короче — это «-», «н/д» и мусор,
+    # на котором учиться нечему, а в метрики они шум добавляют.
+    min_text_length: int = 20
+
+    # Сколько продуктов уходит в общую подвыборку, на которой меряются все
+    # три подхода. Бриф запрещает гонять через LLM больше нескольких тысяч,
+    # и сравнивать подходы можно только на одном и том же множестве.
+    llm_subset_size: int = 1000
+
+    # Сколько продуктов идёт в замер скорости перед полным прогоном.
+    # Тот же порядок, что в M2: сначала число, потом решение о корпусе.
+    benchmark_size: int = 200
+
+    @field_validator("test_size")
+    @classmethod
+    def _validate_test_size(cls, value: float) -> float:
+        if not 0.0 < value < 1.0:
+            raise ValueError(f"test_size={value} должен быть в интервале (0, 1)")
+        return value
+
+    @field_validator("llm_subset_size", "benchmark_size", "min_text_length")
+    @classmethod
+    def _validate_positive(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError(f"значение={value} должно быть > 0")
+        return value
+
+
 class Settings(BaseSettings):
     """Корневые настройки. Получать только через `get_settings()`."""
 
@@ -373,6 +415,7 @@ class Settings(BaseSettings):
     ingest: IngestSettings = Field(default_factory=IngestSettings)
     extract: ExtractSettings = Field(default_factory=ExtractSettings)
     evals: EvalsSettings = Field(default_factory=EvalsSettings)
+    analytics: AnalyticsSettings = Field(default_factory=AnalyticsSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
 
     def secret_values(self) -> frozenset[str]:
