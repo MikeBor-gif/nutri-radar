@@ -53,6 +53,18 @@ REPORTS_DIR = Path("reports")
 # Как в отчёте называется сам эталон. Он стоит в тех же таблицах, что системы,
 # потому что вопрос 2 решается именно сравнением с ним, а не между системами.
 GOLD_LABEL = "эталон (человек)"
+GOLD_LABEL_MODEL = "эталон (МОДЕЛЬ)"
+
+
+def gold_label(gold: list[GoldRecord]) -> str:
+    """Как подписывать эталон в таблицах.
+
+    Подпись «человек» — утверждение о провенансе, и ставить её безусловно
+    значит врать в самом читаемом месте отчёта. Строка выводится из записей.
+    """
+    if any(is_model_annotator(record.annotator) for record in gold):
+        return GOLD_LABEL_MODEL
+    return GOLD_LABEL
 
 
 @dataclass
@@ -141,6 +153,7 @@ def format_zero_sugar(
     gold_profile: dict[str, SugarProfile],
     system_profiles: dict[str, dict[str, SugarProfile]],
     results: dict[str, ComparisonResult],
+    label: str = GOLD_LABEL,
 ) -> str:
     """Материал для вопроса 1: ноль форм сахара — чей предел.
 
@@ -155,7 +168,7 @@ def format_zero_sugar(
     lines = [
         "### Вопрос 1: составы без единой формы сахара",
         "",
-        f"Эталон, размеченный человеком: **{gold_zero} из {gold_products}** "
+        f"{label}: **{gold_zero} из {gold_products}** "
         f"составов без единой формы сахара ({gold_share:.1%}).",
         "",
         "| Система | Нулей | Доля нулей | Вернула ноль вместо N | Пропустила весь сахар |",
@@ -173,7 +186,7 @@ def format_zero_sugar(
 
     lines += [
         "",
-        "**Как читать.** «Вернула ноль вместо N» — продукты, где человек нашёл "
+        "**Как читать.** «Вернула ноль вместо N» — продукты, где разметчик нашёл "
         "формы сахара, а система не нашла ни одной. Это предел системы. "
         "Разница между её долей нулей и долей нулей эталона — то, что "
         "объясняется корпусом, а не системой.",
@@ -185,6 +198,7 @@ def format_language_gap(
     gold_profile: dict[str, SugarProfile],
     system_profiles: dict[str, dict[str, SugarProfile]],
     settings: Settings,
+    label: str = GOLD_LABEL,
 ) -> str:
     """Материал для вопроса 2: перекос между языками — данные или система.
 
@@ -204,7 +218,7 @@ def format_language_gap(
     for lang in langs:
         profile = gold_profile[lang]
         lines.append(
-            f"| {lang} | {profile.products} | {GOLD_LABEL} "
+            f"| {lang} | {profile.products} | {label} "
             f"| {profile.mean:.2f} | {profile.zero_share:.0%} |"
         )
         for system in sorted(system_profiles):
@@ -219,7 +233,7 @@ def format_language_gap(
     lines += [
         "",
         f"**Как читать.** Если перекос между языками виден уже в строке "
-        f"«{GOLD_LABEL}» — так написаны составы, и это свойство данных. "
+        f"«{label}» — так написаны составы, и это свойство данных. "
         "Если он появляется только у системы — это её слабость на языке.",
         "",
         f"**Порог различимости.** ADR-018 измерил разброс между двумя "
@@ -227,6 +241,18 @@ def format_language_gap(
         f"меньше этой по одному прогону значимой называть нельзя.",
     ]
     return "\n".join(lines)
+
+
+# Приставки имён, по которым разметчик опознаётся как модель. Список неполон
+# по построению и полнотой быть не обязан: он ловит не всякую модель, а ту,
+# которой в этом проекте физически могли разметить. Ошибка в сторону лишнего
+# предупреждения дешевле, чем эталон, молча выданный за человеческий.
+MODEL_ANNOTATOR_PREFIXES = ("claude", "gpt", "qwen", "llama", "gemini", "mistral", "o1", "o3")
+
+
+def is_model_annotator(name: str) -> bool:
+    """Похоже ли имя разметчика на модель, а не на человека."""
+    return name.strip().lower().startswith(MODEL_ANNOTATOR_PREFIXES)
 
 
 def format_sample_note(gold: list[GoldRecord], settings: Settings) -> str:
@@ -238,10 +264,32 @@ def format_sample_note(gold: list[GoldRecord], settings: Settings) -> str:
     assisted = sum(1 for record in gold if record.assisted)
     planned = settings.evals.gold_size
 
+    by_annotator: dict[str, int] = defaultdict(int)
+    for record in gold:
+        by_annotator[record.annotator] += 1
+    by_model = {name: n for name, n in by_annotator.items() if is_model_annotator(name)}
+
     lines = [
         f"Эталон: **{len(gold)} продуктов** из запланированных {planned} "
         f"({', '.join(f'{lang}: {count}' for lang, count in sorted(by_lang.items()))}).",
+        "Разметчики: "
+        + ", ".join(f"{name} — {n}" for name, n in sorted(by_annotator.items()))
+        + ".",
     ]
+    if by_model:
+        # Предупреждение стоит выше метрик намеренно. Читатель таблицы должен
+        # узнать про машинную разметку до того, как увидит F1, а не после.
+        names = ", ".join(sorted(by_model))
+        share = sum(by_model.values()) / len(gold)
+        lines.append(
+            f"> **ВНИМАНИЕ: эталон размечен моделью ({names}), доля "
+            f"{share:.0%}.** Правило 6 брифа требует человеческой разметки, "
+            "и оно здесь не выполнено. Ошибки разметчика-модели коррелируют "
+            "с ошибками оцениваемых систем — обе спотыкаются на одних местах, "
+            "поэтому F1 ниже завышен, а перекос по языкам занижен. "
+            "Числа годятся как проверка работоспособности пайплайна "
+            "и **не годятся как оценка качества извлечения**."
+        )
     if len(gold) < planned:
         lines.append(
             f"Разметка не закончена — метрики посчитаны на подмножестве в "
@@ -276,6 +324,7 @@ def build_report(
         Отчёт в markdown. В README уезжает таблица сравнения из него.
     """
     settings = settings or get_settings()
+    label = gold_label(gold)
     stamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
     header = ["# Сравнение систем извлечения состава", "", f"Дата: {stamp}", ""]
 
@@ -335,9 +384,9 @@ def build_report(
     parts += [
         "## Вопросы, оставленные M2",
         "",
-        format_zero_sugar(profile_gold(gold, index), system_profiles, results),
+        format_zero_sugar(profile_gold(gold, index), system_profiles, results, label),
         "",
-        format_language_gap(profile_gold(gold, index), system_profiles, settings),
+        format_language_gap(profile_gold(gold, index), system_profiles, settings, label),
     ]
 
     logger.info(

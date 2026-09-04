@@ -58,14 +58,18 @@ def _extraction(*items: tuple[str, IngredientKind]) -> ExtractionResult:
 
 
 def _gold(
-    code: str, lang: str, *items: tuple[str, IngredientKind], assisted: bool = False
+    code: str,
+    lang: str,
+    *items: tuple[str, IngredientKind],
+    assisted: bool = False,
+    annotator: str = "tester",
 ) -> GoldRecord:
     return GoldRecord(
         code=code,
         lang=lang,
         ingredients_text="состав для теста",
         extraction=_extraction(*items),
-        annotator="tester",
+        annotator=annotator,
         assisted=assisted,
     )
 
@@ -198,6 +202,53 @@ class TestРазмерВыборки:
         note = format_sample_note([_gold("1", "ru")], report_settings)
 
         assert "подсказкой" not in note
+
+    def test_машинная_разметка_названа_прямо(self, report_settings: Settings):
+        """Провенанс обязан быть виден в отчёте, а не только в JSONL."""
+        gold = [_gold("1", "ru", annotator="claude-opus-5")]
+
+        note = format_sample_note(gold, report_settings)
+
+        assert "размечен моделью" in note
+        assert "claude-opus-5" in note
+        assert "не годятся как оценка качества" in note
+
+    def test_человеческая_разметка_предупреждения_не_получает(self, report_settings: Settings):
+        note = format_sample_note([_gold("1", "ru", annotator="Mikhail")], report_settings)
+
+        assert "размечен моделью" not in note
+        assert "Mikhail" in note
+
+    def test_подпись_эталона_не_врёт_про_человека(self, report_settings: Settings):
+        """«эталон (человек)» — утверждение о провенансе, а не украшение."""
+        from nutri_radar.evals.report import gold_label
+
+        assert gold_label([_gold("1", "ru", annotator="Mikhail")]) == "эталон (человек)"
+        assert gold_label([_gold("1", "ru", annotator="claude-opus-5")]) == "эталон (МОДЕЛЬ)"
+
+    def test_одна_машинная_запись_меняет_подпись_всей_таблицы(self, report_settings: Settings):
+        """Смешанный эталон человеческим назвать нельзя."""
+        from nutri_radar.evals.report import gold_label
+
+        gold = [
+            _gold("1", "ru", annotator="Mikhail"),
+            _gold("2", "ru", annotator="claude-opus-5"),
+        ]
+
+        assert gold_label(gold) == "эталон (МОДЕЛЬ)"
+
+    def test_смешанная_разметка_называет_долю(self, report_settings: Settings):
+        """Если часть размечена человеком, доля машинной должна быть видна."""
+        gold = [
+            _gold("1", "ru", annotator="claude-opus-5"),
+            _gold("2", "ru", annotator="Mikhail"),
+            _gold("3", "ru", annotator="Mikhail"),
+            _gold("4", "ru", annotator="Mikhail"),
+        ]
+
+        note = format_sample_note(gold, report_settings)
+
+        assert "25%" in note
 
     def test_языки_перечисляются_с_числами(self, report_settings: Settings):
         note = format_sample_note(
