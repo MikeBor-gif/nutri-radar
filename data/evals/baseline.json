@@ -1,0 +1,22 @@
+{
+  "gold": {
+    "by_lang": {
+      "de": 20,
+      "ru": 20
+    },
+    "digest": "6aba6126b110",
+    "products": 40
+  },
+  "systems": {
+    "off-parser": {
+      "f1_ingredients": 0.3973,
+      "f1_typed": 0.2222,
+      "sugar_accuracy": 0.375
+    },
+    "qwen2.5:3b-instruct-q4_K_M": {
+      "f1_ingredients": 0.2947,
+      "f1_typed": 0.1141,
+      "sugar_accuracy": 0.6
+    }
+  }
+}
