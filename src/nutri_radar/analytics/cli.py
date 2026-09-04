@@ -22,6 +22,7 @@ from nutri_radar.analytics.dataset import (
     save_dataset,
     split,
 )
+from nutri_radar.analytics.tasks.sanity_check import format_sanity, run_sanity_check
 from nutri_radar.config import get_settings
 from nutri_radar.db.session import dispose_engine
 
@@ -100,3 +101,22 @@ def describe(
     typer.echo("\n  Языки:")
     for value, count in frame["lang"].value_counts().head(10).items():
         typer.echo(f"    {value}: {count} ({count / len(frame):.1%})")
+
+
+@app.command()
+def sanity(
+    target: str = typer.Option(
+        "nutriscore_grade", "--target", help=f"Что предсказываем: {', '.join(TARGETS)}."
+    ),
+    sample: int = typer.Option(20000, "--sample", help="Сколько строк брать на проверку."),
+) -> None:
+    """Проверить, что задача решаема и модель учит состав, а не язык.
+
+    Запускается ДО сравнения подходов: если внутри языков модель не обгоняет
+    базлайн, вся таблица M4 измеряет смещение корпуса по странам, и узнать
+    это надо раньше, чем она появится.
+    """
+    settings = get_settings()
+    frame = prepare(load_dataset(), target)
+    result = run_sanity_check(frame, target, settings, sample_size=sample)
+    typer.echo(format_sanity(result))
