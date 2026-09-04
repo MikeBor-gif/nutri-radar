@@ -13,12 +13,20 @@
 Пустой эталон — не провал, а пропуск. Разметку ведёт человек (правило 6),
 и держать сборку красной, пока она не закончена, значит приучить всех
 не смотреть на неё.
+
+Базлайн хранит **отпечаток эталона**, на котором он снят. Разметка идёт
+заходами по языкам, и без отпечатка добавление новых языков сдвинуло бы
+метрики без единой правки кода: гейт объявил бы регрессией смену линейки,
+а не ухудшение продукта. Хуже того, он мог бы и промолчать — если новые
+продукты окажутся легче, реальная просадка утонула бы в среднем.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -60,6 +68,52 @@ class Regression:
         )
 
 
+@dataclass(frozen=True)
+class GoldFingerprint:
+    """Отпечаток эталона, на котором снят базлайн.
+
+    Числа хранятся ради человека, читающего `baseline.json`: «40 продуктов,
+    de 20, ru 20» сразу говорит, на чём мерили. `digest` — ради машины:
+    состав можно поменять, не меняя счётчиков, и тогда сравнение молча
+    поедет.
+    """
+
+    products: int
+    by_lang: dict[str, int]
+    digest: str
+
+    def describe(self) -> str:
+        langs = ", ".join(f"{lang}: {count}" for lang, count in sorted(self.by_lang.items()))
+        return f"{self.products} продуктов ({langs})"
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "products": self.products,
+            "by_lang": dict(sorted(self.by_lang.items())),
+            "digest": self.digest,
+        }
+
+    @classmethod
+    def from_json(cls, data: dict[str, object]) -> GoldFingerprint:
+        by_lang = data.get("by_lang") or {}
+        return cls(
+            products=int(data.get("products", 0)),
+            by_lang={str(k): int(v) for k, v in dict(by_lang).items()},
+            digest=str(data.get("digest", "")),
+        )
+
+
+@dataclass(frozen=True)
+class Baseline:
+    """Зафиксированные метрики вместе с эталоном, на котором они сняты."""
+
+    systems: dict[str, dict[str, float]] = field(default_factory=dict)
+    gold: GoldFingerprint | None = None
+
+    def __bool__(self) -> bool:
+        return bool(self.systems)
+
+
 @dataclass
 class GateResult:
     """Итог проверки."""
@@ -69,6 +123,25 @@ class GateResult:
     reason: str = ""
     regressions: list[Regression] = field(default_factory=list)
     current: dict[str, dict[str, float]] = field(default_factory=dict)
+    # Базлайн снят на другом эталоне. Это не просадка качества, и путать
+    # одно с другим нельзя: чинится оно не кодом, а перефиксацией базлайна.
+    stale: bool = False
+
+
+def gold_fingerprint(gold: list[GoldRecord]) -> GoldFingerprint:
+    """Посчитать отпечаток эталона.
+
+    Хеш берётся от отсортированных кодов: порядок строк в JSONL зависит от
+    того, в каком порядке человек размечал, и различать прогоны по нему
+    значило бы краснеть от перестановки.
+    """
+    codes = sorted(record.code for record in gold)
+    digest = hashlib.sha256("\n".join(codes).encode("utf-8")).hexdigest()[:12]
+    return GoldFingerprint(
+        products=len(gold),
+        by_lang=dict(Counter(record.lang for record in gold)),
+        digest=digest,
+    )
 
 
 def metrics_snapshot(result: ComparisonResult) -> dict[str, float]:
@@ -86,30 +159,63 @@ def metrics_snapshot(result: ComparisonResult) -> dict[str, float]:
     }
 
 
-def load_baseline(path: Path | None = None) -> dict[str, dict[str, float]]:
-    """Прочитать зафиксированный базлайн. Нет файла — пустой словарь."""
+def load_baseline(path: Path | None = None) -> Baseline:
+    """Прочитать зафиксированный базлайн. Нет файла — пустой базлайн."""
     file = path or BASELINE_FILE
     if not file.exists():
         logger.info("Базлайн не найден", extra=safe_extra(path=str(file)))
-        return {}
+        return Baseline()
+
     data = json.loads(file.read_text(encoding="utf-8"))
-    return {system: dict(metrics) for system, metrics in data.items()}
+    systems = {system: dict(metrics) for system, metrics in dict(data.get("systems", {})).items()}
+    gold_data = data.get("gold")
+    gold = GoldFingerprint.from_json(dict(gold_data)) if gold_data else None
+    logger.debug(
+        "Базлайн прочитан",
+        extra=safe_extra(
+            path=str(file),
+            systems=len(systems),
+            gold=gold.describe() if gold else "нет отпечатка",
+        ),
+    )
+    return Baseline(systems=systems, gold=gold)
 
 
-def write_baseline(snapshot: dict[str, dict[str, float]], path: Path | None = None) -> Path:
+def write_baseline(
+    snapshot: dict[str, dict[str, float]],
+    path: Path | None = None,
+    *,
+    gold: GoldFingerprint | None = None,
+) -> Path:
     """Зафиксировать базлайн.
 
     Отдельная команда, а не автоматическое обновление при каждом прогоне:
     базлайн, который переписывается сам, не сторожит ничего — любая просадка
     молча становится новой нормой.
+
+    Args:
+        snapshot: метрики по системам.
+        path: куда писать; по умолчанию `data/evals/baseline.json`.
+        gold: отпечаток эталона, на котором сняты метрики. Без него гейт
+            не отличит просадку качества от смены линейки.
     """
     file = path or BASELINE_FILE
     file.parent.mkdir(parents=True, exist_ok=True)
+    payload: dict[str, object] = {"systems": snapshot}
+    if gold is not None:
+        payload["gold"] = gold.to_json()
     file.write_text(
-        json.dumps(snapshot, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-    logger.info("Базлайн записан", extra=safe_extra(path=str(file), systems=len(snapshot)))
+    logger.info(
+        "Базлайн записан",
+        extra=safe_extra(
+            path=str(file),
+            systems=len(snapshot),
+            gold=gold.describe() if gold else "без отпечатка",
+        ),
+    )
     return file
 
 
@@ -170,8 +276,30 @@ def run_gate(
         logger.info("Гейт пропущен", extra=safe_extra(reason=reason))
         return GateResult(passed=True, skipped=True, reason=reason, current=current)
 
+    fingerprint = gold_fingerprint(gold)
+    if baseline.gold is not None and baseline.gold != fingerprint:
+        # Красный, а не пропуск: базлайн, снятый на другом эталоне, не сторожит
+        # ничего, и зелёная сборка означала бы «проверено», хотя не проверено.
+        # Но и не просадка: причина не в коде, и чинится она перефиксацией.
+        reason = (
+            f"Эталон изменился с момента фиксации базлайна: было "
+            f"{baseline.gold.describe()}, стало {fingerprint.describe()}. "
+            "Метрики на разных наборах не сравнимы — пересчитайте базлайн "
+            "командой `evals baseline` и перепроверьте отчёт."
+        )
+        logger.warning(
+            "Базлайн снят на другом эталоне",
+            extra=safe_extra(
+                baseline_gold=baseline.gold.describe(),
+                current_gold=fingerprint.describe(),
+                baseline_digest=baseline.gold.digest,
+                current_digest=fingerprint.digest,
+            ),
+        )
+        return GateResult(passed=False, stale=True, reason=reason, current=current)
+
     regressions: list[Regression] = []
-    for system, metrics in baseline.items():
+    for system, metrics in baseline.systems.items():
         if system not in current:
             # Система пропала из предсказаний. Это тоже регрессия: сравнение
             # обещало четыре системы, а показывает три.
@@ -203,6 +331,13 @@ def format_gate(result: GateResult, max_drop: float) -> str:
     """Человекочитаемый итог для лога CI."""
     if result.skipped:
         return f"ГЕЙТ ПРОПУЩЕН: {result.reason}"
+
+    if result.stale:
+        lines = [f"ГЕЙТ НЕ ПРОЙДЕН: {result.reason}", "", "Текущие метрики:"]
+        for system, metrics in sorted(result.current.items()):
+            values = ", ".join(f"{name} {value:.3f}" for name, value in sorted(metrics.items()))
+            lines.append(f"  {system}: {values}")
+        return "\n".join(lines)
 
     lines = [f"Порог просадки: {max_drop:.1f} пункта F1"]
     for system, metrics in sorted(result.current.items()):

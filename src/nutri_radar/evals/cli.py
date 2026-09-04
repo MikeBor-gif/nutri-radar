@@ -28,6 +28,7 @@ from nutri_radar.evals.compare import (
 from nutri_radar.evals.gate import (
     collect_current,
     format_gate,
+    gold_fingerprint,
     metrics_snapshot,
     run_gate,
     write_baseline,
@@ -267,8 +268,10 @@ def baseline() -> None:
         raise typer.Exit(code=1)
 
     snapshot = {system: metrics_snapshot(result) for system, result in results.items()}
-    path = write_baseline(snapshot)
+    fingerprint = gold_fingerprint(gold)
+    path = write_baseline(snapshot, gold=fingerprint)
     typer.echo(f"Базлайн зафиксирован для {len(snapshot)} систем -> {path}")
+    typer.echo(f"  эталон: {fingerprint.describe()}")
     for system, metrics in sorted(snapshot.items()):
         values = ", ".join(f"{k} {v:.3f}" for k, v in sorted(metrics.items()))
         typer.echo(f"  {system}: {values}")

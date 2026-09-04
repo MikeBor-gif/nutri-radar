@@ -27,6 +27,7 @@ from nutri_radar.config import EvalsSettings, Settings
 from nutri_radar.evals.gate import (
     collect_current,
     format_gate,
+    gold_fingerprint,
     load_baseline,
     metrics_snapshot,
     run_gate,
@@ -127,17 +128,148 @@ class TestБазлайн:
         snapshot = {SYSTEM: {"f1_ingredients": 0.812, "f1_typed": 0.5, "sugar_accuracy": 0.9}}
         path = write_baseline(snapshot, tmp_path / "baseline.json")
 
-        assert load_baseline(path) == snapshot
+        assert load_baseline(path).systems == snapshot
 
     def test_файл_читаем_человеком(self, tmp_path: Path):
         """Базлайн лежит в git и правится глазами — он обязан быть читаемым."""
         path = write_baseline({SYSTEM: {"f1_ingredients": 0.5}}, tmp_path / "baseline.json")
 
         assert "\n" in path.read_text(encoding="utf-8")
-        assert json.loads(path.read_text(encoding="utf-8")) == {SYSTEM: {"f1_ingredients": 0.5}}
+        assert json.loads(path.read_text(encoding="utf-8")) == {
+            "systems": {SYSTEM: {"f1_ingredients": 0.5}}
+        }
 
     def test_отсутствие_файла_не_ошибка(self, tmp_path: Path):
-        assert load_baseline(tmp_path / "нет-такого.json") == {}
+        assert load_baseline(tmp_path / "нет-такого.json").systems == {}
+
+    def test_отпечаток_эталона_ложится_рядом_с_метриками(self, tmp_path: Path):
+        """Без него нельзя узнать, на чём мерили, — а мерить будут заходами."""
+        path = write_baseline(
+            {SYSTEM: {"f1_ingredients": 0.5}},
+            tmp_path / "baseline.json",
+            gold=gold_fingerprint(_gold(4)),
+        )
+
+        loaded = load_baseline(path)
+
+        assert loaded.gold is not None
+        assert loaded.gold.products == 4
+        assert loaded.gold.by_lang == {"ru": 2, "de": 2}
+
+    def test_отпечаток_виден_в_файле_глазами(self, tmp_path: Path):
+        """«40 продуктов, de 20, ru 20» должно читаться без запуска кода."""
+        path = write_baseline(
+            {SYSTEM: {"f1_ingredients": 0.5}},
+            tmp_path / "baseline.json",
+            gold=gold_fingerprint(_gold(4)),
+        )
+
+        data = json.loads(path.read_text(encoding="utf-8"))
+
+        assert data["gold"]["products"] == 4
+        assert data["gold"]["by_lang"] == {"de": 2, "ru": 2}
+
+
+class TestОтпечаткаЭталона:
+    def test_один_и_тот_же_эталон_даёт_один_отпечаток(self):
+        assert gold_fingerprint(_gold(6)) == gold_fingerprint(_gold(6))
+
+    def test_порядок_строк_на_отпечаток_не_влияет(self):
+        """Порядок в JSONL — это порядок разметки человеком, а не свойство набора."""
+        gold = _gold(6)
+
+        assert gold_fingerprint(gold) == gold_fingerprint(list(reversed(gold)))
+
+    def test_добавленный_продукт_меняет_отпечаток(self):
+        assert gold_fingerprint(_gold(6)) != gold_fingerprint(_gold(7))
+
+    def test_подмена_продукта_при_том_же_счёте_видна(self):
+        """Счётчики совпадут, а набор другой — на это и нужен хеш."""
+        gold = _gold(6)
+        подменённый = [*gold[:-1], GoldRecord(**{**gold[-1].model_dump(), "code": "чужой"})]
+
+        assert gold_fingerprint(gold).products == gold_fingerprint(подменённый).products
+        assert gold_fingerprint(gold) != gold_fingerprint(подменённый)
+
+    def test_языки_считаются_по_записям(self):
+        assert gold_fingerprint(_gold(10)).by_lang == {"ru": 5, "de": 5}
+
+
+class TestСменаЭталона:
+    """Разметка идёт заходами по языкам, и эталон растёт между прогонами.
+
+    Без проверки это худший из отказов гейта: он краснеет или зеленеет
+    не от изменения кода, а от смены линейки, и оба исхода лгут одинаково
+    уверенно.
+    """
+
+    def test_рост_эталона_роняет_гейт_как_несравнимость(
+        self, gate_settings: Settings, paths: dict[str, Path]
+    ):
+        _write(paths, gold=_gold(4), predictions=_predictions(8))
+        write_baseline(
+            {SYSTEM: {"f1_ingredients": 1.0}}, paths["baseline"], gold=gold_fingerprint(_gold(4))
+        )
+        write_jsonl(paths["gold"], _gold(8))
+
+        result = _gate(gate_settings, paths)
+
+        assert result.passed is False
+        assert result.stale is True
+        assert result.regressions == []
+
+    def test_причина_называет_оба_набора(self, gate_settings: Settings, paths: dict[str, Path]):
+        """Владелец должен увидеть «было 4, стало 8», а не «упал F1»."""
+        _write(paths, gold=_gold(4), predictions=_predictions(8))
+        write_baseline(
+            {SYSTEM: {"f1_ingredients": 1.0}}, paths["baseline"], gold=gold_fingerprint(_gold(4))
+        )
+        write_jsonl(paths["gold"], _gold(8))
+
+        text = format_gate(_gate(gate_settings, paths), 3.0)
+
+        assert "Эталон изменился" in text
+        assert "4 продуктов" in text
+        assert "8 продуктов" in text
+        assert "evals baseline" in text
+
+    def test_тот_же_эталон_проверку_проходит(self, gate_settings: Settings, paths: dict[str, Path]):
+        _write(paths, gold=_gold(4), predictions=_predictions(4))
+        write_baseline(
+            {SYSTEM: {"f1_ingredients": 1.0}}, paths["baseline"], gold=gold_fingerprint(_gold(4))
+        )
+
+        result = _gate(gate_settings, paths)
+
+        assert result.passed is True
+        assert result.stale is False
+
+    def test_базлайн_без_отпечатка_проверку_не_включает(
+        self, gate_settings: Settings, paths: dict[str, Path]
+    ):
+        """Старый базлайн не должен красить сборку — он просто не знает набора."""
+        _write(paths, gold=_gold(4), predictions=_predictions(4))
+        write_baseline({SYSTEM: {"f1_ingredients": 1.0}}, paths["baseline"])
+
+        result = _gate(gate_settings, paths)
+
+        assert result.stale is False
+        assert result.passed is True
+
+    def test_несравнимость_проверяется_раньше_просадки(
+        self, gate_settings: Settings, paths: dict[str, Path]
+    ):
+        """Иначе смена набора вылезет как «упал F1» и уедет в отчёт как регрессия."""
+        _write(paths, gold=_gold(4), predictions=_predictions(2))
+        write_baseline(
+            {SYSTEM: {"f1_ingredients": 1.0}}, paths["baseline"], gold=gold_fingerprint(_gold(4))
+        )
+        write_jsonl(paths["gold"], _gold(8))
+
+        result = _gate(gate_settings, paths)
+
+        assert result.stale is True
+        assert result.regressions == []
 
 
 class TestПропускиГейта:
