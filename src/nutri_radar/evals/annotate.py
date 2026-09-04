@@ -40,14 +40,25 @@ UNREADABLE_TOKEN = "?"
 QUIT_TOKEN = "q"
 
 
-def pending_items(sample: list[SampleItem], done: list[GoldRecord]) -> list[SampleItem]:
+def pending_items(
+    sample: list[SampleItem], done: list[GoldRecord], lang: str | None = None
+) -> list[SampleItem]:
     """Что осталось разметить.
 
     Сравнение по коду, а не по позиции: выборка могла быть пересортирована,
     а размеченное — нет.
+
+    Args:
+        sample: вся выборка.
+        done: уже размеченное.
+        lang: ограничить одним языком. Выборка перемешана, поэтому без фильтра
+            «размечу двадцать русских» превращается в двадцать случайных.
     """
     annotated = {record.code for record in done}
-    return [item for item in sample if item.code not in annotated]
+    pending = [item for item in sample if item.code not in annotated]
+    if lang is None:
+        return pending
+    return [item for item in pending if item.lang == lang]
 
 
 def parse_ingredients(line: str) -> list[Ingredient]:
@@ -123,6 +134,7 @@ def annotate_session(
     gold_path: Path | None = None,
     assisted: bool = False,
     limit: int | None = None,
+    lang: str | None = None,
 ) -> int:
     """Провести сессию разметки. Возвращает число новых записей.
 
@@ -137,6 +149,7 @@ def annotate_session(
         gold_path: файл эталона; по умолчанию `data/evals/extraction_gold.jsonl`.
         assisted: показывались ли предсказания модели. Пишется в запись.
         limit: сколько продуктов разметить за сессию.
+        lang: размечать только продукты одного языка.
     """
     sample_file = sample_path or SAMPLE_FILE
     gold_file = gold_path or GOLD_FILE
@@ -147,8 +160,15 @@ def annotate_session(
             f"Выборка не найдена: {sample_file}. Сначала соберите её командой `evals sample`."
         )
 
+    if lang is not None:
+        # Опечатку в коде языка ловим здесь, а не пустой сессией: «размечено 0»
+        # выглядит как «всё уже сделано» и молча съедает заход разметчика.
+        available = sorted({item.lang for item in sample})
+        if lang not in available:
+            raise ValueError(f"Языка {lang!r} в выборке нет. Доступны: {', '.join(available)}.")
+
     done = read_jsonl(gold_file, GoldRecord)
-    pending = pending_items(sample, done)
+    pending = pending_items(sample, done, lang=lang)
     logger.info(
         "Сессия разметки начата",
         extra=safe_extra(
@@ -157,6 +177,7 @@ def annotate_session(
             already_done=len(done),
             pending=len(pending),
             assisted=assisted,
+            lang=lang or "все",
         ),
     )
 

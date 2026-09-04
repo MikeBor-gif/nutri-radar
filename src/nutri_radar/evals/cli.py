@@ -114,6 +114,11 @@ def sample(
 def annotate(
     annotator: str = typer.Option(..., "--annotator", help="Кто размечает. Пишется в запись."),
     limit: int = typer.Option(0, "--limit", help="Сколько продуктов за сессию; 0 — все."),
+    lang: str = typer.Option(
+        "",
+        "--lang",
+        help="Размечать только один язык: de, en, fr, pl, ru. Пусто — все подряд.",
+    ),
     assisted: bool = typer.Option(
         False,
         "--assisted",
@@ -125,13 +130,18 @@ def annotate(
     Метки ставит человек (правило 6 брифа). Прогресс сохраняется после каждого
     продукта, так что сессию можно прервать в любой момент.
     """
-    added = annotate_session(
-        annotator=annotator,
-        ask=lambda prompt: typer.prompt(prompt, default="", show_default=False),
-        show=typer.echo,
-        assisted=assisted,
-        limit=limit or None,
-    )
+    try:
+        added = annotate_session(
+            annotator=annotator,
+            ask=lambda prompt: typer.prompt(prompt, default="", show_default=False),
+            show=typer.echo,
+            assisted=assisted,
+            limit=limit or None,
+            lang=lang or None,
+        )
+    except ValueError as exc:
+        typer.echo(str(exc))
+        raise typer.Exit(code=2) from exc
     typer.echo(
         f"\nРазмечено за сессию: {added}. Всего в эталоне: {len(read_jsonl(GOLD_FILE, GoldRecord))}"
     )

@@ -128,6 +128,22 @@ class TestЧтоОсталось:
 
         assert len(pending_items(sample, [])) == 2
 
+    def test_фильтр_по_языку_оставляет_только_свой(self):
+        """Выборка перемешана: без фильтра «двадцать русских» дают двадцать случайных."""
+        sample = [_item("1", "ru"), _item("2", "de"), _item("3", "ru")]
+
+        assert [item.code for item in pending_items(sample, [], lang="ru")] == ["1", "3"]
+
+    def test_фильтр_по_языку_учитывает_уже_размеченное(self):
+        sample = [_item("1", "ru"), _item("2", "de"), _item("3", "ru")]
+        done = [
+            build_record(
+                _item("1", "ru"), [], allergens=[], unreadable=False, annotator="x", assisted=False
+            )
+        ]
+
+        assert [item.code for item in pending_items(sample, done, lang="ru")] == ["3"]
+
 
 class TestЗапись:
     def test_уверенность_человека_всегда_единица(self):
@@ -358,3 +374,92 @@ class TestРежимСПодсказкой:
         )
 
         assert any("assisted=true" in line for line in shown)
+
+
+class TestРазметкаОдногоЯзыка:
+    """Языковой срез — не удобство, а способ ответить на второй вопрос M2.
+
+    Разница ru 1,28 против de 2,42 различается только на эталоне, а размечать
+    сто составов разом никто не станет. Значит, заход по одному языку обязан
+    быть штатным режимом, а не ручной вознёй с выборкой.
+    """
+
+    def test_размечается_только_запрошенный_язык(self, sample_file: Path, gold_file: Path):
+        annotate_session(
+            annotator=ANNOTATOR,
+            ask=_scripted(["sugar:sugar", "", "water:base", ""]),
+            show=lambda _: None,
+            sample_path=sample_file,
+            gold_path=gold_file,
+            lang="ru",
+        )
+
+        records = read_jsonl(gold_file, GoldRecord)
+        assert [record.code for record in records] == ["1", "3"]
+        assert {record.lang for record in records} == {"ru"}
+
+    def test_лимит_действует_внутри_языка(self, sample_file: Path, gold_file: Path):
+        added = annotate_session(
+            annotator=ANNOTATOR,
+            ask=_scripted(["sugar:sugar", ""]),
+            show=lambda _: None,
+            sample_path=sample_file,
+            gold_path=gold_file,
+            lang="ru",
+            limit=1,
+        )
+
+        assert added == 1
+        assert [record.code for record in read_jsonl(gold_file, GoldRecord)] == ["1"]
+
+    def test_следующий_заход_продолжает_с_неразмеченного_в_этом_языке(
+        self, sample_file: Path, gold_file: Path
+    ):
+        annotate_session(
+            annotator=ANNOTATOR,
+            ask=_scripted(["sugar:sugar", ""]),
+            show=lambda _: None,
+            sample_path=sample_file,
+            gold_path=gold_file,
+            lang="ru",
+            limit=1,
+        )
+        annotate_session(
+            annotator=ANNOTATOR,
+            ask=_scripted(["water:base", ""]),
+            show=lambda _: None,
+            sample_path=sample_file,
+            gold_path=gold_file,
+            lang="ru",
+        )
+
+        assert [record.code for record in read_jsonl(gold_file, GoldRecord)] == ["1", "3"]
+
+    def test_другой_язык_не_трогается(self, sample_file: Path, gold_file: Path):
+        """Разметив ru, немецкие обязаны остаться нетронутыми для следующего захода."""
+        annotate_session(
+            annotator=ANNOTATOR,
+            ask=_scripted(["sugar:sugar", "", "water:base", ""]),
+            show=lambda _: None,
+            sample_path=sample_file,
+            gold_path=gold_file,
+            lang="ru",
+        )
+        sample = read_jsonl(sample_file, SampleItem)
+        done = read_jsonl(gold_file, GoldRecord)
+
+        assert [item.code for item in pending_items(sample, done, lang="de")] == ["2"]
+
+    def test_опечатка_в_языке_отбивается_а_не_даёт_пустую_сессию(
+        self, sample_file: Path, gold_file: Path
+    ):
+        """«Размечено 0» читается как «всё сделано» и молча съедает заход."""
+        with pytest.raises(ValueError, match="de, ru"):
+            annotate_session(
+                annotator=ANNOTATOR,
+                ask=_scripted([]),
+                show=lambda _: None,
+                sample_path=sample_file,
+                gold_path=gold_file,
+                lang="py",
+            )
