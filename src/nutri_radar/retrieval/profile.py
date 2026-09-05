@@ -27,6 +27,14 @@
 `Lay's,Lay's Chips,Lay's Chips Cream&Dill,Lay's Chips Cream&Dill 215g`.
 Четыре повтора одного слова смещают вектор в сторону бренда и от состава.
 
+**HTML вычищается.** В 52 213 продуктах из 146 350 — больше трети корпуса —
+состав размечен тегами `<span class="allergen">…</span>`: так Open Food Facts
+подсвечивает аллергены на сайте. В тексте профиля это не информация, а сильная
+общая подстрока у трети базы: одинаковая последовательность символов, которая
+сближает векторы продуктов, не имеющих ничего общего по составу. Теги
+снимаются, содержимое остаётся — аллерген как слово в составе полезен, разметка
+вокруг него нет.
+
 **Версия и хеш.** Правило сборки будет меняться, и вектор, посчитанный
 по старому правилу, внешне неотличим от свежего. Версия читается человеком,
 хеш — кодом: по нему прогон понимает, что перевекторизовать, не перечитывая
@@ -67,6 +75,10 @@ _MAX_INGREDIENTS_CHARS = 2000
 
 _TAXONOMY_PREFIX = re.compile(r"^[a-z]{2}:")
 _WHITESPACE = re.compile(r"\s+")
+# Разметка аллергенов с сайта OFF. Шаблон намеренно широкий — встречаются
+# и `<span class="allergen">`, и `<b>`, и голые `</span>` без открывающего:
+# это краудсорсинговые поля, и рассчитывать на валидный HTML нельзя.
+_HTML_TAG = re.compile(r"<[^>]{0,200}>")
 
 
 @dataclass(frozen=True)
@@ -102,6 +114,18 @@ def clean_category(tag: str) -> str:
     return without_prefix.replace("-", " ").strip()
 
 
+def strip_markup(text: str | None) -> str:
+    """Снять HTML-разметку, оставив содержимое.
+
+    Аллерген как слово в составе полезен — разметка вокруг него нет.
+    Треть корпуса приходит с `<span class="allergen">`, и оставить теги
+    значит дать этой трети общую подстроку, сближающую векторы продуктов
+    без всякого сходства по составу.
+    """
+    without_tags = _HTML_TAG.sub(" ", str(text or ""))
+    return _WHITESPACE.sub(" ", without_tags).strip()
+
+
 def first_brand(brands: str | None) -> str:
     """Первый бренд из перечисления.
 
@@ -133,7 +157,7 @@ def build_profile(
     """
     parts: list[str] = []
 
-    name = _WHITESPACE.sub(" ", str(product_name or "").strip())
+    name = strip_markup(product_name)
     if name:
         parts.append(name)
 
@@ -146,7 +170,7 @@ def build_profile(
     if categories:
         parts.append(", ".join(categories))
 
-    ingredients = _WHITESPACE.sub(" ", str(ingredients_text or "").strip())
+    ingredients = strip_markup(ingredients_text)
     if len(ingredients) > _MAX_INGREDIENTS_CHARS:
         logger.debug(
             "Состав обрезан по потолку длины",

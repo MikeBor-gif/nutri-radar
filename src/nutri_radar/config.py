@@ -449,6 +449,47 @@ class AnalyticsSettings(BaseSettings):
         return value
 
 
+class RetrievalSettings(BaseSettings):
+    """Поиск и RAG: векторизация профилей, pgvector, ответы по найденному."""
+
+    model_config = SettingsConfigDict(env_prefix="RETRIEVAL__", env_file=_ENV_FILE, extra="ignore")
+
+    # Сколько профилей уходит в Ollama одним запросом. Батч упирается
+    # в num_ctx суммарно, а профиль длиннее голого состава — отсюда меньше,
+    # чем в M4.
+    embed_batch_size: int = 24
+    # Сколько строк пишется в БД одной транзакцией. Не то же, что батч
+    # модели: запись дешевле генерации, и дробить её так же мелко значит
+    # платить за круги в базу.
+    db_batch_size: int = 500
+    # Сколько профилей идёт в замер перед полным прогоном.
+    benchmark_size: int = 200
+
+    # --- HNSW ------------------------------------------------------------
+    #
+    # Значения по умолчанию из документации pgvector. Трогать их стоит
+    # только после того, как измерен recall: `ef_search` крутится первым,
+    # `m` — последним, и только если recall упёрся в потолок.
+    hnsw_m: int = 16
+    hnsw_ef_construction: int = 64
+    # Query-time. Должен быть не меньше LIMIT. 100 — точка с хорошим
+    # соотношением recall и латентности по опубликованным замерам.
+    hnsw_ef_search: int = 100
+    # Память на сборку индекса. Дефолт Postgres (64 МБ) превращает сборку
+    # HNSW на 146 тысячах векторов в часы дискового шуршания.
+    maintenance_work_mem: str = "2GB"
+
+    # Сколько продуктов возвращает поиск по умолчанию.
+    top_k: int = 5
+
+    @field_validator("embed_batch_size", "db_batch_size", "benchmark_size", "top_k")
+    @classmethod
+    def _validate_positive_retrieval(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError(f"значение={value} должно быть > 0")
+        return value
+
+
 class Settings(BaseSettings):
     """Корневые настройки. Получать только через `get_settings()`."""
 
@@ -462,6 +503,7 @@ class Settings(BaseSettings):
     extract: ExtractSettings = Field(default_factory=ExtractSettings)
     evals: EvalsSettings = Field(default_factory=EvalsSettings)
     analytics: AnalyticsSettings = Field(default_factory=AnalyticsSettings)
+    retrieval: RetrievalSettings = Field(default_factory=RetrievalSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
 
     def secret_values(self) -> frozenset[str]:

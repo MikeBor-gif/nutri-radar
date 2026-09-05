@@ -27,6 +27,7 @@ from nutri_radar.retrieval.profile import (
     build_profile,
     clean_category,
     first_brand,
+    strip_markup,
 )
 
 
@@ -68,6 +69,33 @@ class TestКатегории:
 
         assert "crisps" in profile.text
         assert "plant based foods and beverages" not in profile.text
+
+
+class TestРазметка:
+    def test_теги_снимаются_содержимое_остаётся(self):
+        """Аллерген как слово в составе полезен, разметка вокруг него нет."""
+        cleaned = strip_markup('Farine de <span class="allergen">blé</span> 27%')
+
+        assert cleaned == "Farine de blé 27%"
+
+    def test_битый_html_не_ломает_очистку(self):
+        """Поля краудсорсинговые, рассчитывать на валидный HTML нельзя."""
+        assert strip_markup("битый </span> тег и <b>жирный") == "битый тег и жирный"
+
+    def test_разметка_не_попадает_в_профиль(self):
+        """52 213 продуктов из 146 350 приходят с этими тегами: общая
+        подстрока у трети базы сближала бы векторы без всякого сходства."""
+        profile = _profile(ingredients_text='Сахар, <span class="allergen">молоко</span>, соль')
+
+        assert "<span" not in profile.text
+        assert "allergen" not in profile.text
+        assert "молоко" in profile.text
+
+    def test_разметка_в_названии_тоже_снимается(self):
+        assert "<b>" not in _profile(product_name="<b>Шоколад</b>").text
+
+    def test_текст_без_разметки_не_меняется(self):
+        assert strip_markup("сахар, вода") == "сахар, вода"
 
 
 class TestБренд:

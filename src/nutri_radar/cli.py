@@ -21,6 +21,7 @@ from nutri_radar.extract import cli as extract_cli
 from nutri_radar.health import CheckStatus, run_health_check
 from nutri_radar.ingest import cli as ingest_cli
 from nutri_radar.logging import setup_logging
+from nutri_radar.retrieval import cli as retrieval_cli
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,7 @@ app.add_typer(ingest_cli.app, name="ingest")
 app.add_typer(extract_cli.app, name="extract")
 app.add_typer(evals_cli.app, name="evals")
 app.add_typer(analytics_cli.app, name="analytics")
+app.add_typer(retrieval_cli.app, name="retrieval")
 
 
 @app.callback()
