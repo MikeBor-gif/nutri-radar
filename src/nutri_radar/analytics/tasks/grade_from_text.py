@@ -308,15 +308,30 @@ __all__ = [
     "run_tfidf",
     "run_tfidf_small",
     "run_zero_shot",
+    "zero_shot_system",
 ]
 
 
 ZERO_SHOT_PREDICTIONS_DIR = Path("data/analytics/zero_shot")
 
 
-def zero_shot_path(target: str, model: str, root: Path | None = None) -> Path:
-    """Файл предсказаний zero-shot. Имя модели — часть пути."""
-    safe = model.replace(":", "_").replace("/", "_")
+def zero_shot_system(model: str, version: str) -> str:
+    """Имя подхода в таблице: модель вместе с версией промпта.
+
+    Версия входит в имя, потому что она — часть подхода, а не деталь
+    запуска. Без неё два прогона по разным промптам перезаписали бы друг
+    друга, и сравнение версий (то самое, ради которого M2 держал три)
+    оказалось бы невозможным.
+    """
+    return f"{model} ({version})"
+
+
+def zero_shot_path(
+    target: str, model: str, root: Path | None = None, version: str | None = None
+) -> Path:
+    """Файл предсказаний zero-shot. Модель и версия промпта — часть пути."""
+    name = zero_shot_system(model, version) if version else model
+    safe = name.replace(":", "_").replace("/", "_").replace(" ", "_")
     return (root or ZERO_SHOT_PREDICTIONS_DIR) / target / f"{safe}.jsonl"
 
 
@@ -366,7 +381,8 @@ async def run_zero_shot(
     prompt = load_prompt(version)
     schema = grade_schema(sorted(frame[target].astype(str).unique()))
 
-    path = zero_shot_path(target, llm.model_name, root)
+    system = zero_shot_system(llm.model_name, version)
+    path = zero_shot_path(target, llm.model_name, root, version)
     path.parent.mkdir(parents=True, exist_ok=True)
     done = _read_zero_shot(path)
     logger.info(
@@ -432,7 +448,7 @@ async def run_zero_shot(
     _, baseline = majority_baseline(subset, target)
 
     score = score_predictions(
-        llm.model_name,
+        system,
         subset[target],
         predicted_series,
         baseline=baseline,
@@ -449,7 +465,7 @@ async def run_zero_shot(
     logger.info(
         "Zero-shot прогон завершён",
         extra=safe_extra(
-            model=llm.model_name,
+            model=system,
             accuracy=round(score.accuracy, 4),
             refusals=refusals,
             minutes=round(predict_seconds / 60, 1),

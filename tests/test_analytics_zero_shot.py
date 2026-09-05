@@ -23,7 +23,11 @@ import pytest
 
 from nutri_radar.analytics.dataset import prepare
 from nutri_radar.analytics.prompts import available_versions, grade_schema, load_prompt
-from nutri_radar.analytics.tasks.grade_from_text import run_zero_shot, zero_shot_path
+from nutri_radar.analytics.tasks.grade_from_text import (
+    run_zero_shot,
+    zero_shot_path,
+    zero_shot_system,
+)
 from nutri_radar.config import AnalyticsSettings, Settings
 from nutri_radar.errors import ConfigurationError, LLMUnavailableError
 from nutri_radar.llm.adapters import FakeLLM
@@ -108,7 +112,7 @@ class TestПрогон:
             scores_root=tmp_path,
         )
 
-        assert zero_shot_path(TARGET, "fake-model", tmp_path).exists()
+        assert zero_shot_path(TARGET, "fake-model", tmp_path, "grade_v1").exists()
         assert score.products == 10
 
     async def test_перезапуск_не_зовёт_модель_повторно(
@@ -193,9 +197,21 @@ class TestПрогон:
         assert set(score.by_lang) <= {"ru", "de"}
 
     async def test_двоеточие_в_имени_модели_не_ломает_путь(self):
-        path = zero_shot_path(TARGET, "qwen2.5:3b-instruct-q4_K_M")
+        path = zero_shot_path(TARGET, "qwen2.5:3b-instruct-q4_K_M", version="grade_v1")
 
         assert ":" not in path.name
+        assert " " not in path.name
+
+    async def test_версия_промпта_входит_в_имя_подхода(self):
+        """Иначе два прогона по разным промптам перезаписали бы друг друга,
+        и сравнение версий стало бы невозможным."""
+        assert zero_shot_system("qwen2.5:3b", "grade_v2") == "qwen2.5:3b (grade_v2)"
+
+    async def test_разные_версии_пишутся_в_разные_файлы(self):
+        first = zero_shot_path(TARGET, "qwen2.5:3b", version="grade_v1")
+        second = zero_shot_path(TARGET, "qwen2.5:3b", version="grade_v2")
+
+        assert first != second
 
 
 class TestОшибки:
@@ -231,7 +247,9 @@ class TestОшибки:
             scores_root=tmp_path,
         )
 
-        lines = zero_shot_path(TARGET, "fake-model", tmp_path).read_text(encoding="utf-8")
+        lines = zero_shot_path(TARGET, "fake-model", tmp_path, "grade_v1").read_text(
+            encoding="utf-8"
+        )
 
         assert '"predicted": ""' in lines
 
