@@ -269,3 +269,41 @@ def majority_baseline(frame: pd.DataFrame, target: str) -> tuple[str, float]:
         return "", 0.0
     counts = frame[target].value_counts()
     return str(counts.index[0]), float(counts.iloc[0] / len(frame))
+
+
+def drop_rare_classes(
+    frame: pd.DataFrame,
+    target: str,
+    settings: Settings | None = None,
+) -> tuple[pd.DataFrame, dict[str, int]]:
+    """Исключить классы, на которых нельзя ни учиться, ни мериться.
+
+    Решение принимается до прогона и записывается в отчёт, а не подгоняется
+    под результат. Повод конкретный: `nova_group=2` встречается 25 раз
+    на 138 254 продукта. В тесте таких окажется около пяти, модель на них
+    ничему не научится, а macro-F1 усреднится по классу, про который нельзя
+    сказать вообще ничего, — и просядет на пятую часть без всякой связи
+    с качеством.
+
+    Объединять класс 2 с классом 1 было бы неверно по существу: NOVA 1 —
+    это необработанная еда, NOVA 2 — кулинарные ингредиенты (масло, соль,
+    сахар), которые едят не сами по себе. Это разные вещи, и склеивать их
+    ради красивой цифры значит испортить разметку.
+
+    Returns:
+        Пара «набор без редких классов, что именно исключено и по сколько».
+    """
+    _validate_target(target)
+    settings = settings or get_settings()
+    minimum = settings.analytics.min_class_products
+
+    counts = frame[target].value_counts()
+    dropped = {str(label): int(n) for label, n in counts.items() if n < minimum}
+    if not dropped:
+        return frame, {}
+
+    logger.warning(
+        "Классы исключены: слишком мало примеров",
+        extra=safe_extra(target=target, dropped=dropped, minimum=minimum),
+    )
+    return frame[~frame[target].isin(dropped)].reset_index(drop=True), dropped

@@ -12,6 +12,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 import httpx
+import pandas as pd
 import typer
 
 from nutri_radar.analytics.dataset import (
@@ -38,8 +39,10 @@ from nutri_radar.analytics.tasks.grade_from_text import (
     run_tfidf_small,
     run_zero_shot,
 )
+from nutri_radar.analytics.tasks.nova import TARGET as NOVA_TARGET
+from nutri_radar.analytics.tasks.nova import format_dropped, prepare_nova
 from nutri_radar.analytics.tasks.sanity_check import format_sanity, run_sanity_check
-from nutri_radar.config import get_settings
+from nutri_radar.config import Settings, get_settings
 from nutri_radar.db.session import dispose_engine
 from nutri_radar.llm.adapters import OllamaEmbeddings, OllamaLLM
 
@@ -66,6 +69,22 @@ def _run[T](coro_factory: Callable[[], Awaitable[T]]) -> T:
             await dispose_engine()
 
     return asyncio.run(main())
+
+
+def _prepared(target: str, settings: Settings) -> pd.DataFrame:
+    """Набор под задачу, с исключёнными вырожденными классами.
+
+    Один помощник на все команды: подходы обязаны видеть ровно один и тот же
+    набор, иначе разница их чисел включит ещё и разницу в том, что каждому
+    досталось.
+    """
+    frame = prepare(load_dataset(), target)
+    if target == NOVA_TARGET:
+        frame, dropped = prepare_nova(frame, settings)
+        if dropped:
+            typer.echo(format_dropped(dropped, len(frame) + sum(dropped.values())))
+            typer.echo("")
+    return frame
 
 
 @app.command()
@@ -152,7 +171,7 @@ def tfidf(
     числа сравнение подходов было бы сравнением разных задач.
     """
     settings = get_settings()
-    frame = prepare(load_dataset(), target)
+    frame = _prepared(target, settings)
     full, common = run_tfidf(frame, target, settings)
 
     typer.echo(format_score(full, "полный тест"))
@@ -201,7 +220,7 @@ def tfidf_small(
     корпус эмбеддингам не по карману (219 минут GPU по замеру).
     """
     settings = get_settings()
-    frame = prepare(load_dataset(), target)
+    frame = _prepared(target, settings)
     full, common = run_tfidf_small(frame, target, settings)
 
     typer.echo(format_score(full, "полный тест"))
@@ -221,7 +240,7 @@ def embed(
     продолжает с невекторизованных.
     """
     settings = get_settings()
-    frame = prepare(load_dataset(), target)
+    frame = _prepared(target, settings)
 
     async def run() -> tuple[object, object]:
         async with httpx.AsyncClient(base_url=settings.ollama.base_url) as client:
@@ -252,7 +271,7 @@ def zero_shot(
     после каждого продукта.
     """
     settings = get_settings()
-    frame = prepare(load_dataset(), target)
+    frame = _prepared(target, settings)
 
     async def run() -> object:
         async with httpx.AsyncClient(base_url=settings.ollama.base_url) as client:

@@ -231,9 +231,7 @@ class TestГрафики:
     def test_нулевая_стоимость_не_ломает_логарифм(self, tmp_path: Path):
         """У TF-IDF инференс быстрее миллисекунды на продукт; ноль
         на логарифмической оси не рисуется вовсе."""
-        path = plot_accuracy_vs_cost(
-            [_score(predict_seconds=0.0)], TARGET, tmp_path / "zero.png"
-        )
+        path = plot_accuracy_vs_cost([_score(predict_seconds=0.0)], TARGET, tmp_path / "zero.png")
 
         assert path.exists()
 
