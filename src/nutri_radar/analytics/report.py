@@ -84,9 +84,10 @@ def format_comparison(scores: list[Score], title: str, note: str) -> str:
     failing = [score for score in scores if score.lift <= 0]
     if failing:
         names = ", ".join(f"**{score.system}**" for score in failing)
+        verb = "не обгоняют" if len(failing) > 1 else "не обгоняет"
         lines += [
             "",
-            f"{names} не обгоняет базлайн: на этой задаче подход работает хуже, "
+            f"{names} {verb} базлайн: на этой задаче подход работает хуже, "
             "чем одна строчка «всегда самый частый класс». Стоимость при этом "
             "он всё равно берёт.",
         ]
