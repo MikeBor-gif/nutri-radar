@@ -245,6 +245,16 @@ class TestОтчёт:
                 index = text.splitlines().index(line)
                 assert index == 0 or text.splitlines()[index - 1] == ""
 
+    def test_оговорка_про_утечку_зависит_от_задачи(self, tmp_path: Path):
+        """Одна фраза на обе задачи врала бы в половине случаев: nova_group
+        считается не по нутриентам, и риск утечки у неё другой."""
+        save_score(_score(), "nova_group", SET_FULL, tmp_path)
+
+        text = build_report("nova_group", tmp_path)
+
+        assert "степень переработки" in text
+        assert "вычисляется по ним" not in text
+
     def test_пустые_результаты_не_роняют_сборку(self, tmp_path: Path):
         assert "Результатов нет" in build_report(TARGET, tmp_path)
 
