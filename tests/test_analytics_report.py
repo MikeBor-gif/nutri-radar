@@ -183,6 +183,21 @@ class TestТаблицы:
         assert "44.0%" in text
         assert "обгоном около нуля не работает" in text
 
+    def test_подход_хуже_базлайна_называется_словами(self):
+        """Отрицательный обгон — это вывод майлстоуна, а не деталь таблицы:
+        читатель не должен вычитать знак сам."""
+        text = format_comparison(
+            [_score("слабый", accuracy=0.30, baseline=0.44)], "Тест", "примечание"
+        )
+
+        assert "не обгоняет базлайн" in text
+        assert "**слабый**" in text
+
+    def test_работающий_подход_такой_пометки_не_получает(self):
+        text = format_comparison([_score(accuracy=0.69, baseline=0.44)], "Тест", "п")
+
+        assert "не обгоняет базлайн" not in text
+
     def test_пустой_список_не_роняет_отчёт(self):
         assert "Результатов нет" in format_comparison([], "Тест", "примечание")
 
