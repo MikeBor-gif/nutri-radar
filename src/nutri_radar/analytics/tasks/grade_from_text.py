@@ -146,6 +146,7 @@ def _score_pair(
     *,
     fit_seconds: float,
     predict_seconds: float,
+    scores_root: Path | None = None,
 ) -> tuple[Score, Score]:
     """Посчитать метрики на полном тесте и на общей подвыборке.
 
@@ -178,8 +179,8 @@ def _score_pair(
         # иначе окажется посчитана на разных знаменателях.
         predict_seconds=predict_seconds / len(test) * len(subset),
     )
-    save_score(full, target, SET_FULL)
-    save_score(common, target, SET_COMMON)
+    save_score(full, target, SET_FULL, scores_root)
+    save_score(common, target, SET_COMMON, scores_root)
     return full, common
 
 
@@ -338,6 +339,7 @@ async def run_zero_shot(
     settings: Settings | None = None,
     *,
     root: Path | None = None,
+    scores_root: Path | None = None,
 ) -> Score:
     """LLM zero-shot на общей подвыборке.
 
@@ -442,7 +444,7 @@ async def run_zero_shot(
         input_tokens=sum(int(r.get("input_tokens") or 0) for r in done.values()),
         output_tokens=sum(int(r.get("output_tokens") or 0) for r in done.values()),
     )
-    save_score(score, target, SET_COMMON)
+    save_score(score, target, SET_COMMON, scores_root)
     refusals = sum(1 for r in done.values() if not r.get("predicted"))
     logger.info(
         "Zero-shot прогон завершён",

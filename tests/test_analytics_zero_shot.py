@@ -99,7 +99,14 @@ class TestПрогон:
     async def test_предсказания_пишутся_на_диск(self, analytics_settings: Settings, tmp_path: Path):
         llm = FakeLLM(default_response={"grade": "e"}, model_name="fake-model")
 
-        score = await run_zero_shot(_frame(), TARGET, llm, analytics_settings, root=tmp_path)
+        score = await run_zero_shot(
+            _frame(),
+            TARGET,
+            llm,
+            analytics_settings,
+            root=tmp_path,
+            scores_root=tmp_path,
+        )
 
         assert zero_shot_path(TARGET, "fake-model", tmp_path).exists()
         assert score.products == 10
@@ -111,10 +118,24 @@ class TestПрогон:
         потерянное время и лишние токены."""
         frame = _frame()
         first = FakeLLM(default_response={"grade": "e"}, model_name="fake-model")
-        await run_zero_shot(frame, TARGET, first, analytics_settings, root=tmp_path)
+        await run_zero_shot(
+            frame,
+            TARGET,
+            first,
+            analytics_settings,
+            root=tmp_path,
+            scores_root=tmp_path,
+        )
 
         second = FakeLLM(default_response={"grade": "e"}, model_name="fake-model")
-        await run_zero_shot(frame, TARGET, second, analytics_settings, root=tmp_path)
+        await run_zero_shot(
+            frame,
+            TARGET,
+            second,
+            analytics_settings,
+            root=tmp_path,
+            scores_root=tmp_path,
+        )
 
         assert second.call_count == 0
 
@@ -129,7 +150,14 @@ class TestПрогон:
             fail_times=1000,
         )
 
-        score = await run_zero_shot(_frame(), TARGET, llm, analytics_settings, root=tmp_path)
+        score = await run_zero_shot(
+            _frame(),
+            TARGET,
+            llm,
+            analytics_settings,
+            root=tmp_path,
+            scores_root=tmp_path,
+        )
 
         assert score.products == 10
         assert score.accuracy == 0.0
@@ -138,7 +166,14 @@ class TestПрогон:
         """Сравнение без стоимости бессмысленно — это требование DoD."""
         llm = FakeLLM(default_response={"grade": "e"}, model_name="fake-model", latency_s=0.001)
 
-        score = await run_zero_shot(_frame(), TARGET, llm, analytics_settings, root=tmp_path)
+        score = await run_zero_shot(
+            _frame(),
+            TARGET,
+            llm,
+            analytics_settings,
+            root=tmp_path,
+            scores_root=tmp_path,
+        )
 
         assert score.predict_seconds > 0
         assert score.fit_seconds == 0.0
@@ -146,7 +181,14 @@ class TestПрогон:
     async def test_разбивка_по_языкам_считается(self, analytics_settings: Settings, tmp_path: Path):
         llm = FakeLLM(default_response={"grade": "e"}, model_name="fake-model")
 
-        score = await run_zero_shot(_frame(), TARGET, llm, analytics_settings, root=tmp_path)
+        score = await run_zero_shot(
+            _frame(),
+            TARGET,
+            llm,
+            analytics_settings,
+            root=tmp_path,
+            scores_root=tmp_path,
+        )
 
         assert set(score.by_lang) <= {"ru", "de"}
 
@@ -164,7 +206,14 @@ class TestОшибки:
         обязаны досчитаться."""
         llm = FakeLLM(default_response={"grade": "e"}, model_name="fake-model", fail_times=1)
 
-        score = await run_zero_shot(_frame(), TARGET, llm, analytics_settings, root=tmp_path)
+        score = await run_zero_shot(
+            _frame(),
+            TARGET,
+            llm,
+            analytics_settings,
+            root=tmp_path,
+            scores_root=tmp_path,
+        )
 
         assert score.products == 10
         assert score.accuracy > 0.0
@@ -173,7 +222,14 @@ class TestОшибки:
         self, analytics_settings: Settings, tmp_path: Path
     ):
         llm = FakeLLM(default_response={"grade": "e"}, model_name="fake-model", fail_times=1)
-        await run_zero_shot(_frame(), TARGET, llm, analytics_settings, root=tmp_path)
+        await run_zero_shot(
+            _frame(),
+            TARGET,
+            llm,
+            analytics_settings,
+            root=tmp_path,
+            scores_root=tmp_path,
+        )
 
         lines = zero_shot_path(TARGET, "fake-model", tmp_path).read_text(encoding="utf-8")
 
