@@ -100,9 +100,12 @@ src/nutri_radar/
 │   └── cli.py
 │
 ├── analytics/                # ── СЛАЙС: classic ML ──
-│   ├── features.py           #     TF-IDF, эмбеддинги, числовые фичи
+│   ├── dataset.py            #     выгрузка из БД и стратифицированный сплит
+│   ├── features.py           #     TF-IDF, метрики, хранение результатов
+│   ├── embeddings.py         #     векторизация корпуса: замер, кэш, прогон
+│   ├── prompts/              #     промпты zero-shot, версионируемые
 │   ├── tasks/                #     sanity_check.py, grade_from_text.py, nova.py
-│   ├── report.py             #     графики в reports/
+│   ├── report.py             #     таблицы и графики в reports/
 │   └── cli.py
 │
 ├── retrieval/                # ── СЛАЙС: поиск и RAG ──
