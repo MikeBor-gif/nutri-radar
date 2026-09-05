@@ -217,6 +217,18 @@ class TestОтчёт:
 
         assert "Ни одного нутриента" in build_report(TARGET, tmp_path)
 
+    def test_заголовки_отделены_пустой_строкой(self, tmp_path: Path):
+        """Иначе markdown склеит заголовок с абзацем выше, и таблица
+        в README поедет — а её читают глазами, а не парсером."""
+        save_score(_score(), TARGET, SET_FULL, tmp_path)
+
+        text = build_report(TARGET, tmp_path)
+
+        for line in text.splitlines():
+            if line.startswith("#"):
+                index = text.splitlines().index(line)
+                assert index == 0 or text.splitlines()[index - 1] == ""
+
     def test_пустые_результаты_не_роняют_сборку(self, tmp_path: Path):
         assert "Результатов нет" in build_report(TARGET, tmp_path)
 

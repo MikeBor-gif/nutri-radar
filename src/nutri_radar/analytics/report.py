@@ -114,15 +114,15 @@ def build_report(target: str, root: Path | None = None) -> str:
     full = load_scores(target, SET_FULL, root)
     common = load_scores(target, SET_COMMON, root)
 
+    # Секции склеиваются пустой строкой между ними, а не собственными
+    # разделителями внутри списка: фильтр пустых элементов иначе съедал бы
+    # их, и заголовки слипались бы с текстом предыдущего блока.
     parts = [
         f"# Предсказание `{target}` по тексту состава",
-        "",
         f"Дата: {stamp}",
-        "",
         "Признаки собраны **только из текста состава**. Ни одного нутриента: "
         "`nutriscore_grade` вычисляется по ним, и подмешать их значило бы "
         "заново вывести формулу вместо предсказания по составу.",
-        "",
         format_comparison(
             full,
             "На полном тесте",
@@ -130,7 +130,6 @@ def build_report(target: str, root: Path | None = None) -> str:
             "LLM zero-shot в этой таблице нет намеренно: бриф запрещает "
             "гонять через модель больше нескольких тысяч продуктов.",
         ),
-        "",
         format_comparison(
             common,
             "На общей подвыборке",
@@ -138,7 +137,6 @@ def build_report(target: str, root: Path | None = None) -> str:
             "воспроизводимое по seed. Только эти числа можно сравнивать "
             "между собой напрямую.",
         ),
-        "",
         format_by_language(common, "По языкам (общая подвыборка)"),
     ]
 
@@ -146,7 +144,7 @@ def build_report(target: str, root: Path | None = None) -> str:
         "Отчёт собран",
         extra=safe_extra(target=target, full=len(full), common=len(common)),
     )
-    return "\n".join(part for part in parts if part)
+    return "\n\n".join(part for part in parts if part) + "\n"
 
 
 def plot_accuracy_vs_cost(scores: list[Score], target: str, path: Path | None = None) -> Path:
