@@ -199,34 +199,44 @@ def plot_accuracy_vs_cost(scores: list[Score], target: str, path: Path | None = 
     file = path or REPORTS_DIR / f"m4_{target}_accuracy_vs_cost.png"
     file.parent.mkdir(parents=True, exist_ok=True)
 
-    figure, axes = plt.subplots(figsize=(8, 5))
-    for score in scores:
+    figure, axes = plt.subplots(figsize=(9, 5.5))
+
+    # Подписи расставляются с оглядкой на соседей: две точки с почти
+    # одинаковой стоимостью (полный и урезанный TF-IDF) иначе печатают
+    # названия друг поверх друга, и график, ради которого всё делалось,
+    # становится нечитаемым.
+    ordered = sorted(scores, key=lambda item: max(item.seconds_per_1000, 0.01))
+    previous_cost: float | None = None
+    flip = False
+
+    for score in ordered:
         # Ноль на логарифмической оси не рисуется вовсе. Подход, чей инференс
         # быстрее миллисекунды на продукт, ставится на границу шкалы.
         cost = max(score.seconds_per_1000, 0.01)
-        axes.scatter(cost, score.accuracy * 100, s=90)
+        axes.scatter(cost, score.accuracy * 100, s=90, zorder=3)
+
+        # Соседняя по стоимости точка — значит подпись уводим вниз, а не вверх.
+        crowded = previous_cost is not None and cost / previous_cost < 1.5
+        flip = not flip if crowded else False
         axes.annotate(
             score.system,
             (cost, score.accuracy * 100),
             textcoords="offset points",
-            xytext=(8, 4),
+            xytext=(9, -14 if flip else 6),
             fontsize=9,
         )
+        previous_cost = cost
 
     if scores:
         axes.axhline(
             scores[0].baseline * 100,
             linestyle="--",
             linewidth=1,
+            color="grey",
             label=f"базлайн большинства класса ({scores[0].baseline:.1%})",
         )
-        axes.legend(loc="lower right", fontsize=9)
+        axes.legend(loc="upper right", fontsize=9, framealpha=0.9)
 
-    # Логарифм — только когда подходы различаются на порядки. Ради того он
-    # и нужен: LLM дороже TF-IDF в сотни раз, и на линейной шкале дешёвые
-    # схлопнулись бы в точку у нуля. Но на узком диапазоне он вредит:
-    # минорные подписи начинают дублироваться («1, 1, 1.1, 1.1»), и главный
-    # график майлстоуна перестаёт читаться.
     logarithmic = use_log_scale(scores)
     if logarithmic:
         axes.set_xscale("log")
@@ -238,6 +248,9 @@ def plot_accuracy_vs_cost(scores: list[Score], target: str, path: Path | None = 
     axes.set_ylabel("Accuracy, %")
     axes.set_title(f"Точность против стоимости: {target}")
     axes.grid(True, alpha=0.3)
+    # Запас по краям: без него самая дорогая точка и её подпись уезжают
+    # за границу осей и просто не видны.
+    axes.margins(x=0.28, y=0.18)
     figure.tight_layout()
     figure.savefig(file, dpi=140)
     plt.close(figure)
