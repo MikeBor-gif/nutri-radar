@@ -67,3 +67,4 @@ desktop.ini
 # репозиторий не попадают — в нём живёт только генератор.
 tests/data/*.parquet
 tests/data/*.jsonl.gz
+reports/*.log

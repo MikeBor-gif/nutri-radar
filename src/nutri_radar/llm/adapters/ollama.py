@@ -18,6 +18,7 @@ import asyncio
 import json
 import logging
 import time
+from collections.abc import Sequence
 from typing import Any
 
 import httpx
@@ -170,3 +171,121 @@ class OllamaLLM:
             model_name=self._settings.model,
             truncated=truncated,
         )
+
+
+class OllamaEmbeddings:
+    """Модель эмбеддингов. Реализация порта `EmbeddingModel`.
+
+    Отдельный класс, а не метод в `OllamaLLM`: у моделей разный жизненный
+    цикл. На 6 ГБ VRAM `qwen2.5:3b` и `bge-m3` одновременно не помещаются,
+    и держать их в одном объекте значило бы притворяться, что помещаются.
+
+    `keep_alive` управляется явно по той же причине: после прогона
+    эмбеддингов модель надо выгрузить, иначе следующая загрузка модели
+    генерации упрётся в занятую память.
+    """
+
+    def __init__(self, client: httpx.AsyncClient, settings: OllamaSettings) -> None:
+        self._client = client
+        self._settings = settings
+        self._semaphore = asyncio.Semaphore(settings.max_concurrency)
+        logger.info(
+            "Адаптер эмбеддингов Ollama создан",
+            extra={
+                "model": settings.embedding_model,
+                "dimensions": settings.embedding_dim,
+                "keep_alive": settings.keep_alive,
+                "base_url": settings.base_url,
+            },
+        )
+
+    @property
+    def model_name(self) -> str:
+        return self._settings.embedding_model
+
+    @property
+    def dimensions(self) -> int:
+        return self._settings.embedding_dim
+
+    async def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        """Векторизовать батч. Порядок ответа совпадает с порядком входа."""
+        if not texts:
+            return []
+
+        payload = {
+            "model": self._settings.embedding_model,
+            "input": list(texts),
+            "keep_alive": self._settings.keep_alive,
+            "options": {"num_ctx": self._settings.num_ctx},
+        }
+
+        async with self._semaphore:
+            started = time.perf_counter()
+            try:
+                response = await self._client.post(
+                    "/api/embed", json=payload, timeout=self._settings.timeout_s
+                )
+                response.raise_for_status()
+            except httpx.HTTPError as exc:
+                logger.error(
+                    "Ollama недоступна при векторизации",
+                    extra=safe_extra(
+                        base_url=self._settings.base_url,
+                        model=self._settings.embedding_model,
+                        error=type(exc).__name__,
+                    ),
+                )
+                raise LLMUnavailableError(
+                    f"Ollama недоступна ({self._settings.base_url}): {exc}"
+                ) from exc
+            latency = time.perf_counter() - started
+
+        vectors = response.json().get("embeddings") or []
+
+        # Проверяем длину батча и размерность, а не доверяем. Расхождение
+        # размерности иначе всплывёт вставкой в `vector(1024)` через слайс
+        # и два модуля от места, где оно возникло.
+        if len(vectors) != len(texts):
+            raise ExtractionError(f"Ollama вернула {len(vectors)} векторов на {len(texts)} текстов")
+        for vector in vectors:
+            if len(vector) != self._settings.embedding_dim:
+                raise ExtractionError(
+                    f"Размерность вектора {len(vector)} не совпала с ожидаемой "
+                    f"{self._settings.embedding_dim}: модель "
+                    f"{self._settings.embedding_model} вернула не то, что объявлено "
+                    "в настройках"
+                )
+
+        logger.debug(
+            "Батч векторизован",
+            extra=safe_extra(
+                texts=len(texts),
+                latency_s=round(latency, 2),
+                per_text_s=round(latency / len(texts), 4),
+            ),
+        )
+        return [[float(x) for x in vector] for vector in vectors]
+
+    async def unload(self) -> None:
+        """Выгрузить модель из памяти.
+
+        Нужно между стадиями: 6 ГБ VRAM не держат две модели, и без явной
+        выгрузки следующая загрузка либо ждёт истечения `keep_alive`, либо
+        уезжает в своп. Отказ здесь не критичен — модель выгрузится сама
+        по таймауту, поэтому ошибка только логируется.
+        """
+        try:
+            await self._client.post(
+                "/api/embed",
+                json={"model": self._settings.embedding_model, "input": [], "keep_alive": 0},
+                timeout=self._settings.timeout_s,
+            )
+            logger.info(
+                "Модель эмбеддингов выгружена",
+                extra=safe_extra(model=self._settings.embedding_model),
+            )
+        except httpx.HTTPError as exc:
+            logger.warning(
+                "Выгрузить модель не удалось — освободится по keep_alive",
+                extra=safe_extra(error=type(exc).__name__),
+            )

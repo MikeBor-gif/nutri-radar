@@ -20,9 +20,11 @@ en 33%, de 17%. Словарная токенизация развела бы `s
 
 from __future__ import annotations
 
+import json
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -38,6 +40,18 @@ logger = logging.getLogger(__name__)
 
 TEXT_COLUMN = "ingredients_text"
 LANG_COLUMN = "lang"
+
+# Результаты подходов лежат файлами, а не в памяти одного прогона: каждый
+# подход считается своей командой и своим временем (TF-IDF — минуты,
+# эмбеддинги и LLM — часы), и держать их в одном запуске значило бы терять
+# всё при обрыве. Сравнение потом читает каталог — тот же порядок, что
+# у предсказаний систем в evals.
+SCORES_DIR = Path("data/analytics/scores")
+
+# Множество, на котором посчитан результат. Их ровно два, и путать их нельзя:
+# точность на полном тесте и точность на общей подвыборке — разные числа.
+SET_FULL = "full"
+SET_COMMON = "common"
 
 
 @dataclass
@@ -209,3 +223,52 @@ def fit_predict(
         extra=safe_extra(rows=len(test), seconds=round(predict_seconds, 1)),
     )
     return predicted, fit_seconds, predict_seconds
+
+
+def score_path(target: str, dataset: str, system: str, root: Path | None = None) -> Path:
+    """Файл результата одного подхода на одном множестве.
+
+    Имя модели уезжает в путь, поэтому двоеточие и слеши заменяются:
+    `qwen2.5:3b-instruct-q4_K_M` иначе не станет именем файла на Windows.
+    """
+    safe = system.replace(":", "_").replace("/", "_")
+    return (root or SCORES_DIR) / target / dataset / f"{safe}.json"
+
+
+def save_score(score: Score, target: str, dataset: str, root: Path | None = None) -> Path:
+    """Сохранить результат подхода."""
+    path = score_path(target, dataset, score.system, root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(asdict(score), ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    logger.info(
+        "Результат сохранён",
+        extra=safe_extra(path=str(path), system=score.system, dataset=dataset),
+    )
+    return path
+
+
+def load_scores(target: str, dataset: str, root: Path | None = None) -> list[Score]:
+    """Прочитать все результаты одной задачи на одном множестве.
+
+    Имя подхода берётся из содержимого файла, а не из его имени:
+    переименование файла не должно переименовывать подход в таблице.
+    """
+    directory = (root or SCORES_DIR) / target / dataset
+    if not directory.exists():
+        logger.info("Результатов нет", extra=safe_extra(path=str(directory)))
+        return []
+
+    scores: list[Score] = []
+    for file in sorted(directory.glob("*.json")):
+        data = json.loads(file.read_text(encoding="utf-8"))
+        # `by_lang` в JSON становится словарём списков — возвращаем кортежи,
+        # иначе сравнение на равенство между прогонами начнёт врать.
+        data["by_lang"] = {k: tuple(v) for k, v in dict(data.get("by_lang", {})).items()}
+        scores.append(Score(**data))
+    logger.debug(
+        "Результаты прочитаны",
+        extra=safe_extra(path=str(directory), systems=[s.system for s in scores]),
+    )
+    return scores
