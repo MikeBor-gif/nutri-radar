@@ -153,9 +153,16 @@ def sanity(
     это надо раньше, чем она появится.
     """
     settings = get_settings()
-    frame = prepare(load_dataset(), target)
+    frame = _prepared(target, settings)
     result = run_sanity_check(frame, target, settings, sample_size=sample)
-    typer.echo(format_sanity(result))
+    text = format_sanity(result)
+    typer.echo(text)
+
+    # Результат проверки — часть доказательной базы майлстоуна, а не вывод
+    # в консоль: на нём держится право читать таблицу сравнения как оценку
+    # качества. Поэтому он ложится в reports/ рядом с отчётом.
+    path = write_report(text, f"{target}_sanity")
+    typer.echo(f"\nПроверка записана -> {path}")
 
 
 @app.command()
