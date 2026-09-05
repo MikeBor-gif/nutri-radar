@@ -20,7 +20,7 @@ import time
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, field
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert
 
 from nutri_radar.config import Settings, get_settings
@@ -270,3 +270,55 @@ async def embed_corpus(
         ),
     )
     return progress
+
+
+async def build_index(settings: Settings | None = None) -> str:
+    """Построить индекс HNSW поверх залитых векторов.
+
+    **Отдельным шагом, а не миграцией.** На заполненной таблице граф
+    получается лучше, а сборка быстрее: миграция создала бы индекс на пустой
+    таблице, и он дорастал бы по одному вектору при каждой вставке.
+
+    `maintenance_work_mem` поднимается на время сборки: дефолт Postgres —
+    64 МБ, и на 146 тысячах векторов сборка превращается в часы дискового
+    шуршания вместо минут работы в памяти.
+
+    Класс операций `halfvec_cosine_ops` обязан соответствовать оператору
+    в запросе (`<=>`). Несовпадение — отказ, который не виден по результату:
+    запрос вернёт правильный ответ полным перебором.
+    """
+    settings = settings or get_settings()
+    cfg = settings.retrieval
+    name = "ix_product_embedding_hnsw"
+
+    started = time.perf_counter()
+    async with get_session(settings.db) as session:
+        await session.execute(text(f"SET maintenance_work_mem = '{cfg.maintenance_work_mem}'"))
+        await session.execute(text("SET max_parallel_maintenance_workers = 4"))
+        logger.info(
+            "Сборка индекса HNSW начата",
+            extra=safe_extra(
+                m=cfg.hnsw_m,
+                ef_construction=cfg.hnsw_ef_construction,
+                maintenance_work_mem=cfg.maintenance_work_mem,
+            ),
+        )
+        await session.execute(
+            text(
+                f"CREATE INDEX IF NOT EXISTS {name} ON product_embedding "
+                f"USING hnsw (embedding halfvec_cosine_ops) "
+                f"WITH (m = {int(cfg.hnsw_m)}, "
+                f"ef_construction = {int(cfg.hnsw_ef_construction)})"
+            )
+        )
+        await session.commit()
+        size = (
+            await session.execute(text(f"SELECT pg_size_pretty(pg_relation_size('{name}'))"))
+        ).scalar_one()
+
+    minutes = (time.perf_counter() - started) / 60
+    logger.info(
+        "Индекс HNSW построен",
+        extra=safe_extra(name=name, size=str(size), minutes=round(minutes, 1)),
+    )
+    return f"Индекс {name} построен за {minutes:.1f} мин, размер {size}."

@@ -17,7 +17,12 @@ import typer
 from nutri_radar.config import get_settings
 from nutri_radar.db.session import dispose_engine
 from nutri_radar.llm.adapters import OllamaEmbeddings
-from nutri_radar.retrieval.embed import count_candidates, embed_corpus, iter_profiles
+from nutri_radar.retrieval.embed import (
+    build_index,
+    count_candidates,
+    embed_corpus,
+    iter_profiles,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -131,3 +136,13 @@ def profiles(
         typer.echo(f"Показано профилей: {shown}")
 
     _run(run)
+
+
+@app.command("build-index")
+def build_index_command() -> None:
+    """Построить индекс HNSW поверх залитых векторов.
+
+    Запускается ПОСЛЕ заливки: на заполненной таблице граф получается
+    лучше, а сборка быстрее. Миграция создала бы индекс на пустой таблице.
+    """
+    typer.echo(_run(lambda: build_index(get_settings())))
