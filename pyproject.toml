@@ -25,6 +25,10 @@ dependencies = [
     "scikit-learn>=1.6",
     "pandas>=2.2",
     "matplotlib>=3.10",
+    # M5: типы pgvector для SQLAlchemy и регистрация адаптера asyncpg.
+    # Официальный биндинг автора расширения; расширение названо в стеке
+    # брифа. Согласовано отдельно (правило 7).
+    "pgvector>=0.4",
 ]
 
 [project.scripts]
