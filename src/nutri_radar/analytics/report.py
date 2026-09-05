@@ -32,6 +32,7 @@ import matplotlib
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
+from matplotlib.ticker import FuncFormatter
 
 from nutri_radar.analytics.features import (
     SET_COMMON,
@@ -147,6 +148,34 @@ def build_report(target: str, root: Path | None = None) -> str:
     return "\n\n".join(part for part in parts if part) + "\n"
 
 
+# Во сколько раз самый дорогой подход должен обгонять самый дешёвый,
+# чтобы логарифмическая шкала начала помогать, а не мешать.
+LOG_SCALE_RATIO = 10.0
+
+
+def use_log_scale(scores: list[Score]) -> bool:
+    """Нужна ли логарифмическая ось стоимости.
+
+    Логарифм существует ради одного случая: LLM дороже TF-IDF в сотни раз,
+    и на линейной шкале дешёвые подходы схлопнулись бы в точку у нуля.
+    На узком диапазоне он вредит — минорные подписи начинают дублироваться
+    («1, 1, 1.1, 1.1»), и главный график майлстоуна перестаёт читаться.
+    """
+    costs = [max(score.seconds_per_1000, 0.01) for score in scores]
+    if not costs:
+        return False
+    return max(costs) / min(costs) > LOG_SCALE_RATIO
+
+
+def _format_seconds(value: float, _position: int = 0) -> str:
+    """Подпись оси стоимости: целые числа там, где они целые."""
+    if value >= 10:
+        return f"{value:.0f}"
+    if value >= 1:
+        return f"{value:.1f}".rstrip("0").rstrip(".")
+    return f"{value:.2f}".rstrip("0").rstrip(".")
+
+
 def plot_accuracy_vs_cost(scores: list[Score], target: str, path: Path | None = None) -> Path:
     """График «точность против стоимости».
 
@@ -159,7 +188,7 @@ def plot_accuracy_vs_cost(scores: list[Score], target: str, path: Path | None = 
 
     figure, axes = plt.subplots(figsize=(8, 5))
     for score in scores:
-        # Ноль на логарифмической оси не рисуется. Подход, чей инференс
+        # Ноль на логарифмической оси не рисуется вовсе. Подход, чей инференс
         # быстрее миллисекунды на продукт, ставится на границу шкалы.
         cost = max(score.seconds_per_1000, 0.01)
         axes.scatter(cost, score.accuracy * 100, s=90)
@@ -180,8 +209,19 @@ def plot_accuracy_vs_cost(scores: list[Score], target: str, path: Path | None = 
         )
         axes.legend(loc="lower right", fontsize=9)
 
-    axes.set_xscale("log")
-    axes.set_xlabel("Стоимость инференса, секунд на 1000 продуктов (логарифм)")
+    # Логарифм — только когда подходы различаются на порядки. Ради того он
+    # и нужен: LLM дороже TF-IDF в сотни раз, и на линейной шкале дешёвые
+    # схлопнулись бы в точку у нуля. Но на узком диапазоне он вредит:
+    # минорные подписи начинают дублироваться («1, 1, 1.1, 1.1»), и главный
+    # график майлстоуна перестаёт читаться.
+    logarithmic = use_log_scale(scores)
+    if logarithmic:
+        axes.set_xscale("log")
+        # Дефолтный форматтер печатает «1.025 × 10⁰» — заменяем на числа.
+        axes.xaxis.set_major_formatter(FuncFormatter(_format_seconds))
+    axes.set_xlabel(
+        "Стоимость инференса, секунд на 1000 продуктов" + (" (логарифм)" if logarithmic else "")
+    )
     axes.set_ylabel("Accuracy, %")
     axes.set_title(f"Точность против стоимости: {target}")
     axes.grid(True, alpha=0.3)

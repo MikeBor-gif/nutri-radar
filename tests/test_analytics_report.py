@@ -38,6 +38,7 @@ from nutri_radar.analytics.report import (
     format_comparison,
     plot_accuracy_vs_cost,
     plot_confusion,
+    use_log_scale,
 )
 
 TARGET = "nutriscore_grade"
@@ -246,6 +247,27 @@ class TestГрафики:
         path = plot_accuracy_vs_cost([_score(predict_seconds=0.0)], TARGET, tmp_path / "zero.png")
 
         assert path.exists()
+
+    def test_разброс_на_порядки_включает_логарифм(self):
+        """Ради этого случая логарифм и нужен: LLM дороже TF-IDF в сотни раз,
+        и на линейной шкале дешёвые схлопнулись бы в точку у нуля."""
+        scores = [_score("дешёвый", predict_seconds=1.0), _score("дорогой", predict_seconds=1000.0)]
+
+        assert use_log_scale(scores) is True
+
+    def test_узкий_диапазон_логарифм_не_включает(self):
+        """Иначе подписи дублируются («1, 1, 1.1, 1.1»), и главный график
+        майлстоуна перестаёт читаться."""
+        scores = [_score("а", predict_seconds=1.0), _score("б", predict_seconds=1.1)]
+
+        assert use_log_scale(scores) is False
+
+    def test_пустой_список_логарифм_не_включает(self):
+        assert use_log_scale([]) is False
+
+    def test_нулевая_стоимость_не_делит_на_ноль(self):
+        """У TF-IDF инференс быстрее миллисекунды на продукт."""
+        assert use_log_scale([_score(predict_seconds=0.0)]) is False
 
     def test_матрица_ошибок_рисуется(self, tmp_path: Path):
         path = plot_confusion(_score(), TARGET, tmp_path / "cm.png")
