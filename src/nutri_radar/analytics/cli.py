@@ -131,8 +131,13 @@ def describe(
     typer.echo(f"  baseline большинства класса: «{label}» — {share:.1%}")
 
     typer.echo("\n  Классы:")
+    minimum = settings.analytics.min_class_products
     for value, count in frame[target].value_counts().sort_index().items():
-        typer.echo(f"    {value}: {count} ({count / len(frame):.1%})")
+        # Команда показывает сырое распределение — смотреть на него нужно до
+        # того, как что-то исключено. Но какие классы в сравнение не попадут,
+        # читатель должен видеть здесь, иначе он будет искать их в отчёте.
+        mark = "  <- исключён: примеров меньше порога" if count < minimum else ""
+        typer.echo(f"    {value}: {count} ({count / len(frame):.1%}){mark}")
 
     typer.echo("\n  Языки:")
     for value, count in frame["lang"].value_counts().head(10).items():
