@@ -494,6 +494,41 @@ class RetrievalSettings(BaseSettings):
         return value
 
 
+class AgentSettings(BaseSettings):
+    """Агент с инструментами: лимиты и промпт."""
+
+    model_config = SettingsConfigDict(env_prefix="AGENT__", env_file=_ENV_FILE, extra="ignore")
+
+    prompt_version: str = "agent_v1"
+
+    # Потолок шагов — условие завершимости, а не удобство. Слабая модель
+    # склонна повторять один и тот же вызов, и без потолка цикл не кончится.
+    # Восемь: хватает на «найди → уточни → ответь» с запасом на одну ошибку,
+    # и не даёт разогнаться зацикливанию.
+    max_steps: int = 8
+
+    # Потолок токенов на весь диалог. Второй предохранитель: шаги могут
+    # быть дешёвыми по числу, но дорогими по длине наблюдений — выдача
+    # поиска на пять продуктов это тысячи токенов.
+    max_tokens: int = 20_000
+
+    # Таймаут одного инструмента. Живой API OFF отвечает не мгновенно,
+    # и висящий вызов останавливает весь прогон по набору вопросов.
+    tool_timeout_s: float = 20.0
+
+    # Сколько строк максимум возвращает `sql_query`. Не защита от вреда —
+    # защита от того, что модель получит десять тысяч строк и утонет
+    # в них вместе с контекстом.
+    sql_max_rows: int = 20
+
+    @field_validator("max_steps", "max_tokens", "sql_max_rows")
+    @classmethod
+    def _validate_positive_agent(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError(f"значение={value} должно быть > 0")
+        return value
+
+
 class Settings(BaseSettings):
     """Корневые настройки. Получать только через `get_settings()`."""
 
@@ -508,6 +543,7 @@ class Settings(BaseSettings):
     evals: EvalsSettings = Field(default_factory=EvalsSettings)
     analytics: AnalyticsSettings = Field(default_factory=AnalyticsSettings)
     retrieval: RetrievalSettings = Field(default_factory=RetrievalSettings)
+    agent: AgentSettings = Field(default_factory=AgentSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
 
     def secret_values(self) -> frozenset[str]:
