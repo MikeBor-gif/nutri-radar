@@ -23,7 +23,6 @@ from nutri_radar.agent.tools.lookup_barcode import (
     FIELDS,
     USER_AGENT,
     format_product,
-    lookup_barcode_tool,
     run_lookup_barcode,
 )
 from nutri_radar.agent.tools.sql_query import ALLOWED_TABLES, validate_sql

@@ -27,9 +27,7 @@ from nutri_radar.llm.adapters import FakeLLM
 
 @pytest.fixture
 def agent_settings(settings: Settings) -> Settings:
-    return settings.model_copy(
-        update={"agent": AgentSettings(max_steps=4, max_tokens=10_000)}
-    )
+    return settings.model_copy(update={"agent": AgentSettings(max_steps=4, max_tokens=10_000)})
 
 
 def _registry(result: ToolResult | None = None) -> ToolRegistry:
@@ -134,9 +132,7 @@ class TestЛимиты:
     async def test_лимит_токенов_останавливает_цикл(self, settings: Settings):
         """Второй предохранитель: шаги бывают дешёвыми по числу
         и дорогими по длине наблюдений."""
-        tight = settings.model_copy(
-            update={"agent": AgentSettings(max_steps=50, max_tokens=1)}
-        )
+        tight = settings.model_copy(update={"agent": AgentSettings(max_steps=50, max_tokens=1)})
         llm = FakeLLM(response_factory=lambda prompt: _call())
 
         run = await run_agent("вопрос", llm, _registry(), tight)
