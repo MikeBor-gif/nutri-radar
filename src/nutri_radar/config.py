@@ -482,6 +482,10 @@ class RetrievalSettings(BaseSettings):
     # Сколько продуктов возвращает поиск по умолчанию.
     top_k: int = 5
 
+    # Версия промпта RAG. Параметр, а не константа: сравнение версий —
+    # то же требование брифа, что в M2 и M4.
+    rag_prompt_version: str = "rag_v1"
+
     @field_validator("embed_batch_size", "db_batch_size", "benchmark_size", "top_k")
     @classmethod
     def _validate_positive_retrieval(cls, value: int) -> int:

@@ -16,13 +16,26 @@ import typer
 
 from nutri_radar.config import get_settings
 from nutri_radar.db.session import dispose_engine
-from nutri_radar.llm.adapters import OllamaEmbeddings
+from nutri_radar.llm.adapters import OllamaEmbeddings, OllamaLLM
 from nutri_radar.retrieval.embed import (
     build_index,
     count_candidates,
     embed_corpus,
     iter_profiles,
 )
+from nutri_radar.retrieval.metrics import (
+    GoldQuery,
+    RetrievalReport,
+    append_query,
+    format_report,
+    read_queries,
+    score_grounding,
+    score_recall,
+    write_report,
+)
+from nutri_radar.retrieval.rag import answer as rag_answer
+from nutri_radar.retrieval.search import SearchFilters
+from nutri_radar.retrieval.search import search as search_products
 
 logger = logging.getLogger(__name__)
 
@@ -146,3 +159,139 @@ def build_index_command() -> None:
     лучше, а сборка быстрее. Миграция создала бы индекс на пустой таблице.
     """
     typer.echo(_run(lambda: build_index(get_settings())))
+
+
+@app.command()
+def search(
+    query: str = typer.Argument(..., help="Что искать."),
+    limit: int = typer.Option(0, "--limit", help="Сколько вернуть; 0 — из настроек."),
+    lang: str = typer.Option("", "--lang", help="Ограничить языком состава."),
+    grade: str = typer.Option("", "--grade", help="Оценки через запятую: a,b."),
+) -> None:
+    """Найти продукты по смыслу запроса."""
+    settings = get_settings()
+    filters = SearchFilters(
+        lang=lang or None,
+        grade_in=tuple(g.strip() for g in grade.split(",") if g.strip()),
+    )
+
+    async def run() -> None:
+        async with httpx.AsyncClient(base_url=settings.ollama.base_url) as client:
+            model = OllamaEmbeddings(client, settings.ollama)
+            vector = (await model.embed([query]))[0]
+            await model.unload()
+        result = await search_products(
+            vector, query=query, limit=limit or None, filters=filters, settings=settings
+        )
+        typer.echo(
+            f"Найдено {len(result.hits)} за {result.latency_s * 1000:.0f} мс "
+            f"({result.filters.describe()})"
+        )
+        for hit in result.hits:
+            name = _printable(hit.product_name or "без названия")
+            typer.echo(
+                f"  {hit.similarity:.3f}  {hit.code}  {name[:60]}  [{hit.nutriscore_grade or '-'}]"
+            )
+
+    _run(run)
+
+
+@app.command()
+def ask(
+    question: str = typer.Argument(..., help="Вопрос о продуктах."),
+    limit: int = typer.Option(0, "--limit", help="Сколько продуктов дать модели."),
+) -> None:
+    """Ответить на вопрос строго по найденным продуктам.
+
+    Если релевантного не нашлось, отказ формируется кодом и модель
+    не вызывается вовсе: просить её не выдумывать и надеяться —
+    не проверяемое свойство системы.
+    """
+    settings = get_settings()
+
+    async def run() -> None:
+        async with httpx.AsyncClient(base_url=settings.ollama.base_url) as client:
+            embeddings = OllamaEmbeddings(client, settings.ollama)
+            vector = (await embeddings.embed([question]))[0]
+            await embeddings.unload()
+
+            result = await search_products(
+                vector, query=question, limit=limit or None, settings=settings
+            )
+            llm = OllamaLLM(client, settings.ollama)
+            answer = await rag_answer(question, result, llm, settings)
+
+        typer.echo(_printable(answer.text))
+        typer.echo("")
+        if answer.refused:
+            typer.echo("Отказ: релевантного в базе не нашлось.")
+            return
+        typer.echo(
+            f"Источников в выдаче: {len(answer.sources)}, ссылок в ответе: {len(answer.cited)}"
+        )
+        if answer.cited_outside_sources:
+            typer.echo(f"ВЫДУМАННЫЕ ссылки: {', '.join(answer.cited_outside_sources)}")
+
+    _run(run)
+
+
+@app.command("add-query")
+def add_query(
+    query: str = typer.Option(..., "--query", help="Формулировка запроса."),
+    expected: str = typer.Option(..., "--expected", help="Штрихкоды через запятую."),
+    kind: str = typer.Option("", "--kind", help="Тип запроса для разбивки в отчёте."),
+    lang: str = typer.Option("", "--lang", help="Язык запроса."),
+    author: str = typer.Option(..., "--author", help="Кто составил."),
+) -> None:
+    """Записать эталонный запрос.
+
+    Запросы составляет ЧЕЛОВЕК (правило 6 брифа) и делает это ДО первого
+    прогона поиска: эталон, написанный после того, как автор увидел выдачу,
+    измеряет согласие системы с самой собой.
+    """
+    codes = [code.strip() for code in expected.split(",") if code.strip()]
+    gold = GoldQuery(query=query, expected=codes, kind=kind, lang=lang, author=author)
+    if not gold.is_usable:
+        typer.echo("Запрос без формулировки или без эталонных штрихкодов не годится.")
+        raise typer.Exit(code=2)
+
+    path = append_query(gold)
+    typer.echo(f"Записано: «{query}» -> {len(codes)} штрихкодов ({path})")
+
+
+@app.command()
+def evaluate(
+    limit: int = typer.Option(0, "--limit", help="Сколько возвращать; 0 — из настроек."),
+    with_rag: bool = typer.Option(True, "--rag/--no-rag", help="Считать и подтверждённость."),
+) -> None:
+    """Посчитать recall@k и подтверждённость на эталонных запросах."""
+    settings = get_settings()
+    queries = read_queries()
+    top_k = limit or settings.retrieval.top_k
+
+    async def run() -> None:
+        report = RetrievalReport(k=top_k)
+        async with httpx.AsyncClient(base_url=settings.ollama.base_url) as client:
+            embeddings = OllamaEmbeddings(client, settings.ollama)
+            vectors = await embeddings.embed([item.query for item in queries])
+            await embeddings.unload()
+
+            results = []
+            for gold, vector in zip(queries, vectors, strict=True):
+                result = await search_products(
+                    vector, query=gold.query, limit=top_k, settings=settings
+                )
+                report.recalls.append(score_recall(gold, result))
+                results.append((gold, result))
+
+            if with_rag:
+                llm = OllamaLLM(client, settings.ollama)
+                for gold, result in results:
+                    answer = await rag_answer(gold.query, result, llm, settings)
+                    report.groundings.append(score_grounding(answer))
+
+        text = format_report(report)
+        typer.echo(_printable(text))
+        typer.echo(f"\nОтчёт записан -> {write_report(text)}")
+
+    _run(run)
