@@ -26,6 +26,9 @@
 !/data/analytics/scores/**
 !/data/analytics/zero_shot/
 !/data/analytics/zero_shot/**
+!/data/retrieval/
+/data/retrieval/*
+!/data/retrieval/queries.jsonl
 !/data/evals/README.md
 !/data/evals/extraction_gold.jsonl
 !/data/evals/sample.jsonl

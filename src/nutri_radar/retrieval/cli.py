@@ -28,8 +28,10 @@ from nutri_radar.retrieval.metrics import (
     RetrievalReport,
     append_query,
     format_report,
+    matching_codes,
     read_queries,
     score_grounding,
+    score_property,
     score_recall,
     write_report,
 )
@@ -281,7 +283,13 @@ def evaluate(
                 result = await search_products(
                     vector, query=gold.query, limit=top_k, settings=settings
                 )
-                report.recalls.append(score_recall(gold, result))
+                if gold.predicate:
+                    # Свойство проверяется тем же условием, которым эталон
+                    # и определялся: один запрос в базу на выдачу.
+                    matching = await matching_codes(gold.predicate, result.codes, settings)
+                    report.properties.append(score_property(gold, result, matching))
+                if gold.expected:
+                    report.recalls.append(score_recall(gold, result))
                 results.append((gold, result))
 
             if with_rag:

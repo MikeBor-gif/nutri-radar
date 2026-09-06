@@ -1,9 +1,23 @@
 """Метрики поиска и RAG: recall@k и подтверждённость ответа.
 
-**recall@k, а не precision.** Вопрос пользователя звучит «найди мне продукты
-с таким-то свойством», и цена пропуска здесь выше цены лишнего результата:
-лишний он отбросит глазами за секунду, пропущенный не увидит никогда.
-Precision считается рядом, но решение принимается по recall.
+**Главная метрика — доля выдачи, обладающая запрошенным свойством,
+а не recall@k.** Первая версия этого модуля считала recall против набора
+из трёх «правильных» продуктов на запрос, и он вышел нулевым на всех
+двадцати запросах. Дело было не в поиске: под условие «шоколад с пальмовым
+маслом» подходит **2035 продуктов**, под «снеки с глутаматом» — 1952.
+Просить систему вернуть в первой пятёрке именно те три, что оракул выбрал
+случайно из двух тысяч, — задача с нулевым решением у любого поиска,
+включая идеальный.
+
+Правильный вопрос при тысячах верных ответов другой: **обладают ли
+найденные продукты запрошенным свойством**. Он проверяется тем же точным
+условием, которым набор и определялся, и отвечает ровно на то, что
+интересует пользователя: «я попросил шоколад с пальмовым маслом — мне
+дали шоколад с пальмовым маслом?»
+
+`recall@k` остаётся в коде: он верен для эталона, где человек назвал
+конкретные продукты, которые обязаны найтись. На оракульном наборе
+он не считается — и в отчёте объясняется почему.
 
 **Подтверждённость считается кодом, а не моделью.** Соблазн — попросить
 модель оценить, подтверждён ли её собственный ответ источниками. Это
@@ -33,7 +47,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from pydantic import BaseModel, Field
+from sqlalchemy import text
 
+from nutri_radar.config import Settings, get_settings
+from nutri_radar.db.session import get_session
 from nutri_radar.logging import safe_extra
 from nutri_radar.retrieval.rag import RagAnswer
 from nutri_radar.retrieval.search import SearchResult
@@ -55,6 +72,11 @@ class GoldQuery(BaseModel):
     # Штрихкоды, которые обязаны найтись. Не «все подходящие в базе» —
     # столько человек не разметит, — а те, про которые он уверен.
     expected: list[str] = Field(default_factory=list)
+    # Точное условие, определяющее «правильный ответ». Заполняется, когда
+    # эталон выведен оракулом: тогда качество выдачи проверяется свойством
+    # каждого найденного продукта, а не совпадением с горсткой примеров.
+    # У эталона, составленного человеком, остаётся пустым.
+    predicate: str = ""
     # Свободная пометка: чем этот запрос отличается от других. Нужна для
     # разбивки в отчёте — «запросы про отсутствие ингредиента» ведут себя
     # иначе, чем «запросы про наличие».
@@ -88,6 +110,26 @@ class RecallScore:
 
 
 @dataclass
+class PropertyScore:
+    """Доля выдачи, обладающая запрошенным свойством.
+
+    Главная метрика поиска на корпусе, где верных ответов тысячи. Отвечает
+    на вопрос пользователя буквально: «я попросил шоколад с пальмовым
+    маслом — мне дали шоколад с пальмовым маслом?»
+    """
+
+    query: str
+    kind: str
+    returned: int
+    matching: int
+    latency_s: float = 0.0
+
+    @property
+    def precision(self) -> float:
+        return self.matching / self.returned if self.returned else 0.0
+
+
+@dataclass
 class GroundingScore:
     """Подтверждённость одного ответа RAG."""
 
@@ -114,8 +156,15 @@ class RetrievalReport:
     """Свод по всем запросам."""
 
     k: int
+    properties: list[PropertyScore] = field(default_factory=list)
     recalls: list[RecallScore] = field(default_factory=list)
     groundings: list[GroundingScore] = field(default_factory=list)
+
+    @property
+    def mean_property_precision(self) -> float:
+        if not self.properties:
+            return 0.0
+        return sum(item.precision for item in self.properties) / len(self.properties)
 
     @property
     def mean_recall(self) -> float:
@@ -131,9 +180,10 @@ class RetrievalReport:
 
     @property
     def median_latency(self) -> float:
-        if not self.recalls:
+        source = self.properties or self.recalls
+        if not source:
             return 0.0
-        values = sorted(item.latency_s for item in self.recalls)
+        values = sorted(item.latency_s for item in source)
         return values[len(values) // 2]
 
     @property
@@ -209,6 +259,25 @@ def score_recall(query: GoldQuery, result: SearchResult) -> RecallScore:
     )
 
 
+def score_property(query: GoldQuery, result: SearchResult, matching: set[str]) -> PropertyScore:
+    """Посчитать долю выдачи, обладающую запрошенным свойством.
+
+    Args:
+        query: эталонный запрос.
+        result: выдача поиска.
+        matching: коды из выдачи, удовлетворяющие условию запроса. Считаются
+            снаружи одним запросом в базу — проверять свойство здесь значило
+            бы тащить БД в модуль метрик.
+    """
+    return PropertyScore(
+        query=query.query,
+        kind=query.kind,
+        returned=len(result.codes),
+        matching=len(set(result.codes) & matching),
+        latency_s=result.latency_s,
+    )
+
+
 def score_grounding(answer: RagAnswer) -> GroundingScore:
     """Посчитать подтверждённость одного ответа.
 
@@ -225,36 +294,57 @@ def score_grounding(answer: RagAnswer) -> GroundingScore:
 
 def format_report(report: RetrievalReport) -> str:
     """Отчёт по метрикам поиска и RAG."""
+    total = len(report.properties) or len(report.recalls)
     lines = [
-        f"# Поиск и RAG: метрики на {len(report.recalls)} эталонных запросах",
+        f"# Поиск и RAG: метрики на {total} эталонных запросах",
         "",
-        f"## recall@{report.k}",
+        f"## Свойство выдачи (top-{report.k})",
         "",
         "| Величина | Значение |",
         "|---|---|",
-        f"| Средний recall@{report.k} | {report.mean_recall:.1%} |",
-        f"| Средний precision@{report.k} | {report.mean_precision:.1%} |",
+        f"| Доля выдачи с запрошенным свойством | {report.mean_property_precision:.1%} |",
         f"| Медианная латентность | {report.median_latency * 1000:.0f} мс |",
         "",
-        "Решение принимается по recall: цена пропуска выше цены лишнего "
-        "результата — лишний пользователь отбросит глазами за секунду, "
-        "пропущенный не увидит никогда.",
+        "**Почему не recall@k.** Под условие каждого запроса подходят тысячи "
+        "продуктов: «шоколад с пальмовым маслом» — 2035, «снеки с глутаматом» — "
+        "1952. Требовать, чтобы в первой пятёрке оказались именно те три, "
+        "что оракул выбрал случайно из двух тысяч, — задача с нулевым решением "
+        "у любого поиска, включая идеальный. Первая версия этой оценки считала "
+        "именно так и дала 0,0% на всех двадцати запросах; число измеряло "
+        "ошибку в методике, а не качество поиска.",
+        "",
+        "Правильный вопрос при тысячах верных ответов — **обладают ли найденные "
+        "продукты запрошенным свойством**. Он проверяется тем же точным условием, "
+        "которым определялся набор, и отвечает буквально на то, что спросил "
+        "пользователь.",
     ]
 
-    by_kind: dict[str, list[RecallScore]] = {}
-    for item in report.recalls:
+    by_kind: dict[str, list[PropertyScore]] = {}
+    for item in report.properties:
         by_kind.setdefault(item.kind or "без типа", []).append(item)
     if len(by_kind) > 1:
         lines += [
             "",
             "### По типам запросов",
             "",
-            "| Тип | Запросов | recall |",
+            "| Тип | Запросов | Доля с свойством |",
             "|---|---|---|",
         ]
-        for kind, items in sorted(by_kind.items()):
-            mean = sum(entry.recall for entry in items) / len(items)
+        for kind, items in sorted(
+            by_kind.items(), key=lambda pair: -sum(e.precision for e in pair[1]) / len(pair[1])
+        ):
+            mean = sum(entry.precision for entry in items) / len(items)
             lines.append(f"| {kind} | {len(items)} | {mean:.1%} |")
+
+    lines += [
+        "",
+        "### По запросам",
+        "",
+        "| Запрос | С свойством | Всего |",
+        "|---|---|---|",
+    ]
+    for item in sorted(report.properties, key=lambda entry: -entry.precision):
+        lines.append(f"| {item.query} | {item.matching} | {item.returned} |")
 
     lines += [
         "",
@@ -304,3 +394,26 @@ def dump_queries_template(path: Path) -> Path:
         encoding="utf-8",
     )
     return path
+
+
+async def matching_codes(
+    predicate: str, codes: list[str], settings: Settings | None = None
+) -> set[str]:
+    """Какие из найденных продуктов удовлетворяют условию запроса.
+
+    Условие подставляется в SQL как есть — оно приходит из файла эталона,
+    который лежит в репозитории и проходит ревью вместе с кодом, а не
+    из пользовательского ввода. Коды передаются параметром: они как раз
+    приходят снаружи.
+
+    Одним запросом на всю выдачу, а не по продукту: пять круговых поездок
+    в базу на каждый запрос превратили бы оценку двадцати запросов в сотню.
+    """
+    if not codes:
+        return set()
+
+    settings = settings or get_settings()
+    statement = text(f"SELECT code FROM products WHERE code = ANY(:codes) AND ({predicate})")
+    async with get_session(settings.db) as session:
+        rows = (await session.execute(statement, {"codes": list(codes)})).all()
+    return {str(row[0]) for row in rows}
