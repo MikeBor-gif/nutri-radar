@@ -15,6 +15,7 @@ import logging
 import typer
 
 from nutri_radar import __version__
+from nutri_radar.agent import cli as agent_cli
 from nutri_radar.analytics import cli as analytics_cli
 from nutri_radar.evals import cli as evals_cli
 from nutri_radar.extract import cli as extract_cli
@@ -38,6 +39,7 @@ app.add_typer(extract_cli.app, name="extract")
 app.add_typer(evals_cli.app, name="evals")
 app.add_typer(analytics_cli.app, name="analytics")
 app.add_typer(retrieval_cli.app, name="retrieval")
+app.add_typer(agent_cli.app, name="agent")
 
 
 @app.callback()

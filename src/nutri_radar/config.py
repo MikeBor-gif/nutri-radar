@@ -529,6 +529,26 @@ class AgentSettings(BaseSettings):
         return value
 
 
+class LangfuseSettings(BaseSettings):
+    """Наблюдаемость через Langfuse (M6).
+
+    Живёт в отдельном compose-профиле: шесть контейнеров ради трассировки
+    не должны подниматься при обычной работе. Не настроен — трассировка
+    деградирует до логов, и это штатный режим, а не отказ.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="LANGFUSE__", env_file=_ENV_FILE, extra="ignore")
+
+    public_key: str = ""
+    secret_key: SecretStr = SecretStr("")
+    host: str = "http://localhost:3000"
+    timeout_s: float = 10.0
+
+    @property
+    def is_configured(self) -> bool:
+        return bool(self.public_key and self.secret_key.get_secret_value())
+
+
 class Settings(BaseSettings):
     """Корневые настройки. Получать только через `get_settings()`."""
 
@@ -544,6 +564,7 @@ class Settings(BaseSettings):
     analytics: AnalyticsSettings = Field(default_factory=AnalyticsSettings)
     retrieval: RetrievalSettings = Field(default_factory=RetrievalSettings)
     agent: AgentSettings = Field(default_factory=AgentSettings)
+    langfuse: LangfuseSettings = Field(default_factory=LangfuseSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
 
     def secret_values(self) -> frozenset[str]:
@@ -553,6 +574,8 @@ class Settings(BaseSettings):
         секретом, а логирование не должно этого угадывать.
         """
         values = {self.db.password.get_secret_value()}
+        if self.langfuse.secret_key.get_secret_value():
+            values.add(self.langfuse.secret_key.get_secret_value())
         if self.anthropic.api_key is not None:
             values.add(self.anthropic.api_key.get_secret_value())
         return frozenset(v for v in values if v)
