@@ -1,0 +1,10 @@
+{"question": "какие продукты содержат пальмовое масло", "expects_tool": "vector_search", "kind": "поиск по составу"}
+{"question": "найди снеки с глутаматом натрия", "expects_tool": "vector_search", "kind": "поиск по составу"}
+{"question": "сколько всего продуктов в базе имеют оценку e", "expects_tool": "sql_query", "kind": "подсчёт"}
+{"question": "сколько продуктов с оценкой a и составом на русском языке", "expects_tool": "sql_query", "kind": "подсчёт"}
+{"question": "что за продукт со штрихкодом 3017620425035", "expects_tool": "lookup_barcode", "kind": "штрихкод"}
+{"question": "покажи состав продукта 5449000000996", "expects_tool": "lookup_barcode", "kind": "штрихкод"}
+{"question": "найди йогурты без добавленного сахара", "expects_tool": "vector_search", "kind": "отрицание"}
+{"question": "какие есть шоколадки с фундуком", "expects_tool": "vector_search", "kind": "поиск по составу"}
+{"question": "сколько продуктов относятся к группе переработки NOVA 4", "expects_tool": "sql_query", "kind": "подсчёт"}
+{"question": "как приготовить борщ", "expects_tool": "", "kind": "вне области"}

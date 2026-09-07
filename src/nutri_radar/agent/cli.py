@@ -16,6 +16,14 @@ from pathlib import Path
 import httpx
 import typer
 
+from nutri_radar.agent.evaluate import (
+    AgentReport,
+    format_report,
+    read_questions,
+    save_runs,
+    score_run,
+    write_report,
+)
 from nutri_radar.agent.loop import AgentRun, run_agent
 from nutri_radar.agent.tools import ToolRegistry
 from nutri_radar.agent.tools.lookup_barcode import lookup_barcode_tool
@@ -126,3 +134,38 @@ def tools() -> None:
     и расплывчатое описание превращается в неверный выбор.
     """
     typer.echo(_printable(build_registry(get_settings()).describe()))
+
+
+@app.command()
+def evaluate() -> None:
+    """Прогнать агента по набору вопросов и посчитать проверяемое.
+
+    Ни одно из чисел не проверяет, был ли ответ верным: это требует
+    человека. Измеряется то, что видно из протокола — дошёл ли до ответа,
+    тот ли инструмент выбрал, сослался ли на штрихкоды, сколько потратил.
+    """
+    settings = get_settings()
+    questions = read_questions()
+    tools = build_registry(settings)
+    tracer = get_tracer(settings)
+
+    async def go() -> tuple[AgentReport, list[tuple[object, AgentRun]]]:
+        report = AgentReport()
+        runs: list[tuple[object, AgentRun]] = []
+        async with httpx.AsyncClient(base_url=settings.ollama.base_url) as client:
+            llm = OllamaLLM(client, settings.ollama)
+            for question in questions:
+                run = await run_agent(question.question, llm, tools, settings, tracer=tracer)
+                report.scores.append(score_run(question, run))
+                runs.append((question, run))
+                typer.echo(_printable(f"— {question.question}: {run.stop_reason}"))
+        return report, runs
+
+    report, runs = _run(go)
+    save_runs(runs)  # type: ignore[arg-type]
+
+    model = runs[0][1].model_name if runs else settings.ollama.model
+    text = format_report(report, model)
+    typer.echo("")
+    typer.echo(_printable(text))
+    typer.echo(f"\nОтчёт записан -> {write_report(text)}")

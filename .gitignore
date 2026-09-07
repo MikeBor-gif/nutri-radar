@@ -29,6 +29,10 @@
 !/data/retrieval/
 /data/retrieval/*
 !/data/retrieval/queries.jsonl
+!/data/agent/
+/data/agent/*
+!/data/agent/questions.jsonl
+!/data/agent/runs.jsonl
 !/data/evals/README.md
 !/data/evals/extraction_gold.jsonl
 !/data/evals/sample.jsonl
