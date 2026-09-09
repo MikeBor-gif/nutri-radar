@@ -1002,7 +1002,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28" },
     { name = "langfuse", specifier = ">=3.0" },
     { name = "matplotlib", specifier = ">=3.10" },
-    { name = "mcp", specifier = ">=1.2" },
+    { name = "mcp", specifier = ">=2.2" },
     { name = "pandas", specifier = ">=2.2" },
     { name = "pgvector", specifier = ">=0.4" },
     { name = "pillow", specifier = ">=11.0" },

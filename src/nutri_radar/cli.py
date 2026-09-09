@@ -2,7 +2,8 @@
 
 Слайсы пайплайна регистрируют здесь свои под-приложения по мере появления:
 `ingest` — M1, `extract` — M2, `evals` — M3, `analytics` — M4,
-`retrieval` — M5, `agent` — M6.
+`retrieval` — M5, `agent` — M6. Точки входа витрины живут
+в группе `serve` — M7.
 
 CLI — тонкая точка входа: разбирает аргументы, вызывает слой ниже,
 форматирует вывод. Доменной логики здесь нет (см. ARCHITECTURE.md).
@@ -23,6 +24,7 @@ from nutri_radar.health import CheckStatus, run_health_check
 from nutri_radar.ingest import cli as ingest_cli
 from nutri_radar.logging import setup_logging
 from nutri_radar.retrieval import cli as retrieval_cli
+from nutri_radar.serve import app as serve_app
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +42,9 @@ app.add_typer(evals_cli.app, name="evals")
 app.add_typer(analytics_cli.app, name="analytics")
 app.add_typer(retrieval_cli.app, name="retrieval")
 app.add_typer(agent_cli.app, name="agent")
+
+# Точки входа витрины (M7): HTTP-API, Telegram-бот и MCP-сервер.
+app.add_typer(serve_app, name="serve")
 
 
 @app.callback()
