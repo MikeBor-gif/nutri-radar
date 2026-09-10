@@ -60,8 +60,9 @@ GitHub Actions
 
 ## Быстрый старт
 
-Нужны Docker, [uv](https://docs.astral.sh/uv/) и (для будущих майлстоунов)
-[Ollama](https://ollama.com/).
+Нужны Docker, [uv](https://docs.astral.sh/uv/) и [Ollama](https://ollama.com/)
+с моделями `qwen2.5:3b-instruct-q4_K_M` и `bge-m3`. Без Ollama работают
+загрузка данных и карточка продукта по штрихкоду; поиск, RAG и агент — нет.
 
 ```bash
 git clone <репозиторий>
@@ -78,15 +79,16 @@ uv run alembic upgrade head
 uv run nutri-radar health
 ```
 
-`health` выводит пять проверок. Отсутствие Ollama или ключа Anthropic — это
-`WARN`, а не ошибка: на M0 они ещё не нужны.
+`health` выводит пять проверок. Отсутствие ключа Anthropic — это `WARN`,
+а не ошибка: проект целиком работает на локальной модели, а облачная нужна
+только чтобы доказать оставшееся (см. [Майлстоуны](#майлстоуны)).
 
 ```
 [OK  ] Postgres: соединение         PostgreSQL 16.14
 [OK  ] Postgres: расширение vector  версия 0.8.5
 [OK  ] Alembic: ревизия             0001 (head)
 [OK  ] Ollama: модели               обе модели на месте
-[WARN] Anthropic: ключ              не задан — понадобится на M3 и M6
+[WARN] Anthropic: ключ              не задан — облачная модель недоступна
 ```
 
 ### Загрузка данных
