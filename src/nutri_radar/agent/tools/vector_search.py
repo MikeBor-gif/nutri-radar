@@ -23,7 +23,7 @@ import httpx
 
 from nutri_radar.agent.tools import Tool, ToolResult
 from nutri_radar.config import Settings, get_settings
-from nutri_radar.llm.adapters import OllamaEmbeddings
+from nutri_radar.llm.factory import build_embeddings
 from nutri_radar.logging import safe_extra
 from nutri_radar.retrieval.search import SearchFilters, SearchHit, search
 
@@ -68,7 +68,7 @@ async def run_vector_search(
     top_k = limit or settings.retrieval.top_k
 
     async with httpx.AsyncClient(base_url=settings.ollama.base_url) as client:
-        model = OllamaEmbeddings(client, settings.ollama)
+        model = build_embeddings(settings, client)
         vector = (await model.embed([query]))[0]
 
     result = await search(

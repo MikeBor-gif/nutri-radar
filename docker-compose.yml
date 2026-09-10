@@ -81,6 +81,87 @@ services:
     command: ["health"]
 
   # ---------------------------------------------------------------------------
+  # Витрина M7. HTTP-API входит в базовый стек, бот — нет.
+  #
+  # Причина разная у каждого. API не требует ничего, кроме базы: он
+  # поднимается везде, где поднимается стек. Боту нужен BOT__TOKEN, а его
+  # нет ни в CI, ни на чужой машине, и падающий сервис ронял бы весь
+  # `docker compose up`. Поэтому бот живёт в профиле:
+  #   docker compose --profile bot up -d
+  #
+  # MCP-сервер сервисом не оформлен намеренно: он общается по stdio, и
+  # запускает его клиент (Claude Desktop, IDE) командой, а не docker
+  # compose. Демон, слушающий stdio в фоне, никому не отвечает.
+  # ---------------------------------------------------------------------------
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB__HOST: db
+      DB__PORT: 5432
+      DB__USER: ${DB__USER:-nutri}
+      DB__PASSWORD: ${DB__PASSWORD:-nutri}
+      DB__NAME: ${DB__NAME:-nutri_radar}
+      # Тот же случай, что у сервиса app: localhost внутри контейнера —
+      # это сам контейнер, а Ollama живёт на хосте вместе с видеокартой.
+      OLLAMA__BASE_URL: http://host.docker.internal:11434
+      ANTHROPIC__API_KEY: ${ANTHROPIC__API_KEY:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      ENVIRONMENT: ${ENVIRONMENT:-local}
+      JSON_LOGS: "true"
+      # Слушать нужно все интерфейсы: на loopback контейнера снаружи
+      # не постучаться, и проброшенный порт вёл бы в никуда.
+      API__HOST: 0.0.0.0
+      API__PORT: 8000
+    ports:
+      - "${API__PORT:-8000}:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: ["serve", "api"]
+    healthcheck:
+      # Готовность проверяется тем же эндпойнтом, что и снаружи: отдельная
+      # проверка «процесс жив» соврала бы при упавшей базе.
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/healthz', timeout=5).status==200 else 1)\""]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+  bot:
+    profiles: ["bot"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB__HOST: db
+      DB__PORT: 5432
+      DB__USER: ${DB__USER:-nutri}
+      DB__PASSWORD: ${DB__PASSWORD:-nutri}
+      DB__NAME: ${DB__NAME:-nutri_radar}
+      OLLAMA__BASE_URL: http://host.docker.internal:11434
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      ENVIRONMENT: ${ENVIRONMENT:-local}
+      JSON_LOGS: "true"
+      # Без токена сервис остановится с понятным сообщением. Значение
+      # не подставляется дефолтом: пустой токен и отсутствующий токен —
+      # одно и то же, и притворяться, что он есть, незачем.
+      BOT__TOKEN: ${BOT__TOKEN:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: ["serve", "bot"]
+    # Бот держит long polling: обрыв связи с Telegram не должен требовать
+    # ручного перезапуска.
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
   # Профиль tracing — Langfuse. Выключен по умолчанию:
   #   docker compose --profile tracing up -d
   #

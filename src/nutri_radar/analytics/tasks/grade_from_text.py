@@ -335,6 +335,33 @@ def zero_shot_path(
     return (root or ZERO_SHOT_PREDICTIONS_DIR) / target / f"{safe}.jsonl"
 
 
+def _as_float(value: object) -> float:
+    """Число из записи прогона, прочитанной с диска.
+
+    Записи JSONL типизированы как `object`: они пришли из файла, а не из
+    кода. Отсутствие поля и `null` считаются нулём — так же, как раньше
+    делал `or 0.0`. А вот непригодное значение поднимает `ValueError`
+    и не превращается в тихий ноль: стоимость прогона входит в обязательные
+    метрики проекта, и занизить её молча хуже, чем упасть.
+    """
+    if value is None:
+        return 0.0
+    if isinstance(value, bool):
+        # bool — подкласс int, и `True` дал бы 1.0. В поле стоимости это
+        # почти наверняка испорченные данные, а не единица.
+        raise ValueError(f"ожидалось число, получено {value!r}")
+    if isinstance(value, int | float):
+        return float(value)
+    if isinstance(value, str):
+        return float(value) if value.strip() else 0.0
+    raise ValueError(f"ожидалось число, получено {type(value).__name__}")
+
+
+def _as_int(value: object) -> int:
+    """Целое из записи прогона. Правила те же, что у `_as_float`."""
+    return int(_as_float(value))
+
+
 def _read_zero_shot(path: Path) -> dict[str, dict[str, object]]:
     """Прочитать уже посчитанное. Нет файла — пусто, а не ошибка."""
     if not path.exists():
@@ -443,7 +470,7 @@ async def run_zero_shot(
                     ),
                 )
 
-    predict_seconds = sum(float(r.get("latency_s") or 0.0) for r in done.values())
+    predict_seconds = sum(_as_float(r.get("latency_s")) for r in done.values())
     predicted_series = pd.Series([str(done[str(c)]["predicted"]) for c in subset["code"]])
     _, baseline = majority_baseline(subset, target)
 
@@ -457,8 +484,8 @@ async def run_zero_shot(
         # часть ответа на вопрос «что брать».
         fit_seconds=0.0,
         predict_seconds=predict_seconds,
-        input_tokens=sum(int(r.get("input_tokens") or 0) for r in done.values()),
-        output_tokens=sum(int(r.get("output_tokens") or 0) for r in done.values()),
+        input_tokens=sum(_as_int(r.get("input_tokens")) for r in done.values()),
+        output_tokens=sum(_as_int(r.get("output_tokens")) for r in done.values()),
     )
     save_score(score, target, SET_COMMON, scores_root)
     refusals = sum(1 for r in done.values() if not r.get("predicted"))

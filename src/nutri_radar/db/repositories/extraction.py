@@ -124,6 +124,39 @@ class ExtractionRepository:
         # Result — берём через getattr, чтобы не врать типами.
         return int(getattr(result, "rowcount", 0) or 0)
 
+    async def latest_by_code(self, code: str) -> ExtractionRow | None:
+        """Самый свежий разбор состава этого продукта. Нет разбора — `None`.
+
+        У продукта может быть несколько извлечений: разными версиями промпта
+        и разными моделями (см. докстринг модуля). Карточке нужен один,
+        и берётся самый свежий по времени — не «лучший», потому что критерия
+        лучшести без эталона нет, а свежесть проверяема.
+
+        Отсутствие разбора — норма: через LLM прошло 1187 продуктов из
+        147 тысяч корпуса, и у остального будут только поля Open Food Facts.
+        """
+        statement = (
+            select(ProductExtraction)
+            .where(ProductExtraction.code == code)
+            .order_by(ProductExtraction.extracted_at.desc(), ProductExtraction.id.desc())
+            .limit(1)
+        )
+        row = (await self._session.execute(statement)).scalar_one_or_none()
+        if row is None:
+            logger.debug("Разбора состава нет", extra=safe_extra(code=code))
+            return None
+
+        logger.debug(
+            "Разбор состава прочитан",
+            extra=safe_extra(
+                code=code,
+                model=row.model_name,
+                prompt_version=row.prompt_version,
+                sugar_forms=row.distinct_sugar_forms,
+            ),
+        )
+        return ExtractionRow.model_validate(row, from_attributes=True)
+
     async def extracted_codes(
         self,
         codes: list[str],

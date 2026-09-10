@@ -16,11 +16,14 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nutri_radar.db.models.product import Product, ProductRaw
 from nutri_radar.ingest.models import RawProduct
+from nutri_radar.logging import safe_extra
 
 logger = logging.getLogger(__name__)
 
@@ -47,11 +50,59 @@ NUTRIENT_COLUMNS = {
 }
 
 
+class ProductSummary(BaseModel):
+    """Продукт на границе с БД: то, что нужно показать человеку.
+
+    Отдельная модель, а не ORM-объект: `Product` за пределами `db/` дал бы
+    `MissingGreenlet` на первом обращении к атрибуту вне сессии
+    (см. ARCHITECTURE.md). И не весь `Product` целиком — сорок колонок
+    нутриентов и служебных полей в карточке не нужны, а тащить их наружу
+    значит превращать модель показа в копию схемы таблицы.
+    """
+
+    code: str
+    product_name: str | None = None
+    generic_name: str | None = None
+    brands: str | None = None
+
+    ingredients_text: str | None = None
+    ingredients_text_lang: str | None = None
+    lang: str | None = None
+
+    nutriscore_grade: str | None = None
+    nova_group: int | None = None
+
+    categories_tags: list[str] = Field(default_factory=list)
+    allergens_tags: list[str] = Field(default_factory=list)
+    additives_tags: list[str] = Field(default_factory=list)
+
+    energy_kcal_100g: float | None = None
+    sugars_100g: float | None = None
+    salt_100g: float | None = None
+
+
 class ProductRepository:
-    """Батчевая запись продуктов."""
+    """Батчевая запись продуктов и чтение одного продукта по штрихкоду."""
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
+
+    async def get_by_code(self, code: str) -> ProductSummary | None:
+        """Прочитать один продукт корпуса. Нет такого кода — `None`.
+
+        Отсутствие продукта — нормальный ответ, а не ошибка: в корпусе
+        147 тысяч продуктов из 4,63 млн строк дампа, и большинство реальных
+        штрихкодов в него не входит по построению.
+        """
+        row = (
+            await self._session.execute(select(Product).where(Product.code == code))
+        ).scalar_one_or_none()
+        if row is None:
+            logger.debug("Продукта нет в корпусе", extra=safe_extra(code=code))
+            return None
+
+        logger.debug("Продукт прочитан из корпуса", extra=safe_extra(code=code))
+        return ProductSummary.model_validate(row, from_attributes=True)
 
     async def upsert_batch(
         self,

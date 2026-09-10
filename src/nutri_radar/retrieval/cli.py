@@ -16,7 +16,9 @@ import typer
 
 from nutri_radar.config import get_settings
 from nutri_radar.db.session import dispose_engine
-from nutri_radar.llm.adapters import OllamaEmbeddings, OllamaLLM
+from nutri_radar.llm.adapters import OllamaEmbeddings
+from nutri_radar.llm.factory import build_llm
+from nutri_radar.llm.runtime import get_runtime
 from nutri_radar.retrieval.embed import (
     build_index,
     count_candidates,
@@ -35,6 +37,8 @@ from nutri_radar.retrieval.metrics import (
     score_recall,
     write_report,
 )
+from nutri_radar.retrieval.pipeline import ask as pipeline_ask
+from nutri_radar.retrieval.pipeline import embed_texts, search_by_text
 from nutri_radar.retrieval.rag import answer as rag_answer
 from nutri_radar.retrieval.search import SearchFilters
 from nutri_radar.retrieval.search import search as search_products
@@ -179,12 +183,13 @@ def search(
 
     async def run() -> None:
         async with httpx.AsyncClient(base_url=settings.ollama.base_url) as client:
-            model = OllamaEmbeddings(client, settings.ollama)
-            vector = (await model.embed([query]))[0]
-            await model.unload()
-        result = await search_products(
-            vector, query=query, limit=limit or None, filters=filters, settings=settings
-        )
+            result = await search_by_text(
+                query,
+                client=client,
+                settings=settings,
+                limit=limit or None,
+                filters=filters,
+            )
         typer.echo(
             f"Найдено {len(result.hits)} за {result.latency_s * 1000:.0f} мс "
             f"({result.filters.describe()})"
@@ -213,15 +218,9 @@ def ask(
 
     async def run() -> None:
         async with httpx.AsyncClient(base_url=settings.ollama.base_url) as client:
-            embeddings = OllamaEmbeddings(client, settings.ollama)
-            vector = (await embeddings.embed([question]))[0]
-            await embeddings.unload()
-
-            result = await search_products(
-                vector, query=question, limit=limit or None, settings=settings
-            )
-            llm = OllamaLLM(client, settings.ollama)
-            answer = await rag_answer(question, result, llm, settings)
+            answer = (
+                await pipeline_ask(question, client=client, settings=settings, limit=limit or None)
+            ).answer
 
         typer.echo(_printable(answer.text))
         typer.echo("")
@@ -274,9 +273,9 @@ def evaluate(
     async def run() -> None:
         report = RetrievalReport(k=top_k)
         async with httpx.AsyncClient(base_url=settings.ollama.base_url) as client:
-            embeddings = OllamaEmbeddings(client, settings.ollama)
-            vectors = await embeddings.embed([item.query for item in queries])
-            await embeddings.unload()
+            vectors = await embed_texts(
+                [item.query for item in queries], client=client, settings=settings
+            )
 
             results = []
             for gold, vector in zip(queries, vectors, strict=True):
@@ -293,10 +292,14 @@ def evaluate(
                 results.append((gold, result))
 
             if with_rag:
-                llm = OllamaLLM(client, settings.ollama)
-                for gold, result in results:
-                    answer = await rag_answer(gold.query, result, llm, settings)
-                    report.groundings.append(score_grounding(answer))
+                llm = build_llm(settings, client)
+                # Одно удержание очереди на весь цикл: между вопросами
+                # модель не выгружается, иначе прогон по эталону превратился
+                # бы в двадцать перезагрузок весов.
+                async with get_runtime(settings).hold(llm.model_name):
+                    for gold, result in results:
+                        answer = await rag_answer(gold.query, result, llm, settings)
+                        report.groundings.append(score_grounding(answer))
 
         text = format_report(report)
         typer.echo(_printable(text))

@@ -69,6 +69,9 @@ nutri-radar/
 │   ├── errors.py              ✓ NutriRadarError и доменные исключения
 │   ├── logging.py             ✓ JSON и человекочитаемый формат, фильтр секретов
 │   ├── tracing.py             ✓ порт Tracer + NoOpTracer
+│   ├── wording.py             ✓ обязательная атрибуция и запрещённые ярлыки (M7)
+│   ├── openfoodfacts.py       ✓ единственный модуль, ходящий в живой API OFF (M7)
+│   ├── serve.py               ✓ команды serve api | bot | mcp (M7)
 │   ├── health.py              ✓ пять проверок готовности среды
 │   ├── cli.py                 ✓ корень Typer: version, health
 │   ├── db/                    ✓ ОБЩЕЕ: Base, async-движок, сессии
@@ -77,7 +80,11 @@ nutri-radar/
 │   │   ├── models/run.py      ✓ таблица runs — журнал прогонов
 │   │   ├── models/product.py  ✓ products_raw и products
 │   │   └── repositories/      ✓ идемпотентный upsert по code с учётом rev
-│   ├── llm/                   — ОБЩЕЕ: порты и адаптеры моделей (M2)
+│   ├── llm/                   ✓ ОБЩЕЕ: порты и адаптеры моделей (M2)
+│   │   ├── ports.py          ✓   StructuredLLM и EmbeddingModel
+│   │   ├── adapters/         ✓   ollama, anthropic, fake
+│   │   ├── runtime.py        ✓   очередь к моделям: одна в VRAM за раз (M7)
+│   │   └── factory.py        ✓   выбор провайдера по LLM__PROVIDER (M7)
 │   ├── ingest/                ✓ СЛАЙС: дамп, DuckDB-выборка, дельты
 │   │   ├── probe.py           ✓   разведка схемы дампа без скачивания
 │   │   ├── download.py        ✓   идемпотентное скачивание с докачкой
@@ -99,14 +106,30 @@ nutri-radar/
 │   │   ├── embed.py          ✓   векторизация корпуса и индекс HNSW
 │   │   ├── search.py         ✓   поиск с фильтрами, проверка плана
 │   │   ├── rag.py            ✓   ответ по найденному, отказ «не знаю»
-│   │   └── metrics.py        ✓   свойство выдачи, подтверждённость
+│   │   ├── metrics.py        ✓   свойство выдачи, подтверждённость
+│   │   ├── pipeline.py       ✓   единая сборка конвейера для всех точек входа (M7)
+│   │   └── product_card.py   ✓   карточка по штрихкоду: корпус, фолбэк в OFF (M7)
 │   ├── agent/                 ✓   СЛАЙС: инструменты и цикл агента (M6)
 │   │   ├── loop.py           ✓   цикл руками, без фреймворков
 │   │   ├── tools/            ✓   sql_query, vector_search, lookup_barcode
-│   │   └── evaluate.py       ✓   прогон по вопросам, проверяемые признаки
-│   ├── api/                   — ТОЧКА ВХОДА: FastAPI (M7)
-│   ├── bot/                   — ТОЧКА ВХОДА: Telegram, aiogram 3 (M7)
-│   └── mcp_server/            — ТОЧКА ВХОДА: MCP поверх базы (M7)
+│   │   ├── evaluate.py       ✓   прогон по вопросам, проверяемые признаки
+│   │   └── registry.py       ✓   сборка реестра инструментов для всех потребителей
+│   ├── api/                   ✓ ТОЧКА ВХОДА: FastAPI (M7)
+│   │   ├── app.py            ✓   сборка, lifespan, request_id, CORS
+│   │   ├── errors.py         ✓   доменные ошибки в коды HTTP
+│   │   ├── schemas.py        ✓   контракт API, отдельный от внутренних структур
+│   │   ├── factory.py        ✓   готовое приложение для uvicorn --reload
+│   │   └── routes/           ✓   products, search, ask, agent
+│   ├── bot/                   ✓ ТОЧКА ВХОДА: Telegram, aiogram 3 (M7)
+│   │   ├── app.py            ✓   диспетчер, long polling, зависимости
+│   │   ├── texts.py          ✓   всё, что бот говорит от себя; /start с ODbL
+│   │   ├── middlewares.py    ✓   приватность: хэш чата, длина текста, не текст
+│   │   ├── keyboards.py      ✓   инлайн-кнопки, состояние внутри callback_data
+│   │   ├── barcode_image.py  ✓   чтение штрихкода с фото через zxing-cpp
+│   │   ├── errors.py         ✓   доменные ошибки в сообщения пользователю
+│   │   └── handlers/         ✓   commands, barcode, photo, ask
+│   └── mcp_server/            ✓ ТОЧКА ВХОДА: MCP поверх реестра агента (M7)
+│       └── server.py         ✓   три инструмента наружу по stdio
 ├── tests/
 │   ├── conftest.py            ✓ герметичные настройки, мок Ollama, тестовая БД
 │   ├── test_config.py         ✓ секреты, валидаторы, сверка .env.example
@@ -136,12 +159,18 @@ nutri-radar/
 | `alembic/versions/` | история схемы БД |
 | `src/nutri_radar/extract/schemas.py` | *(M2)* Pydantic-схема выхода LLM = JSON-схема генерации |
 | `src/nutri_radar/llm/ports.py` | *(M2)* порты внешних моделей; точка подмены провайдера |
+| `src/nutri_radar/llm/factory.py` | *(M7)* **единственное место, где выбирается провайдер** по `LLM__PROVIDER`; возвращает порты, а не адаптеры |
 | `data/evals/extraction_gold.jsonl` | *(M3)* эталонная разметка; **создаётся только человеком** — сейчас нарушено, см. ADR-026 |
 | `src/nutri_radar/analytics/dataset.py` | *(M4)* выгрузка без нутриентов: защита от утечки структурная, а не дисциплинарная |
 | `src/nutri_radar/analytics/report.py` | *(M4)* таблица «точность против стоимости» — ответ майлстоуна |
 | `src/nutri_radar/agent/tools/sql_query.py` | *(M6)* **единственное место, где SQL от модели идёт в базу.** Защита структурная: read-only, один SELECT, белый список |
-| `src/nutri_radar/agent/tools/lookup_barcode.py` | *(M6)* **единственное место, где проект ходит в живой API OFF** |
+| `src/nutri_radar/agent/tools/lookup_barcode.py` | *(M6)* инструмент агента поверх `openfoodfacts.py` |
 | `src/nutri_radar/agent/loop.py` | *(M6)* цикл агента руками — предмет демонстрации по правилу 7 |
+| `src/nutri_radar/openfoodfacts.py` | *(M7)* **единственный модуль, который ходит в живой API OFF.** Потребителей два: инструмент агента и карточка вне корпуса (ADR-031) |
+| `src/nutri_radar/llm/runtime.py` | *(M7)* **очередь к моделям: одна в VRAM за раз.** Без неё два параллельных запроса выгружают модели друг у друга |
+| `src/nutri_radar/retrieval/pipeline.py` | *(M7)* единственная сборка конвейера; на неё переведён и CLI |
+| `src/nutri_radar/wording.py` | *(M7)* обязательная атрибуция ODbL и список запрещённых оценочных ярлыков; проверяется тестами |
+| `src/nutri_radar/bot/middlewares.py` | *(M7)* приватность логов: хэш чата и длина текста, но не текст и не `user_id` |
 
 ## Документация
 

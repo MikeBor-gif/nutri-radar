@@ -100,6 +100,13 @@ class OllamaSettings(BaseSettings):
     # в конфиге — на другом железе выигрыш может появиться (ADR-017).
     max_concurrency: int = 1
 
+    # Сколько ждать очереди к моделям, прежде чем записать это в лог как
+    # аномалию. Не таймаут и не отказ: длинная генерация законно держит GPU
+    # десятки секунд. Но ожидание в минуту — признак того, что запросов
+    # больше, чем железо переваривает, и знать об этом надо до жалоб
+    # на «сервис тормозит» (см. llm/runtime.py).
+    lock_warn_after_s: float = 30.0
+
     @field_validator("num_ctx")
     @classmethod
     def _validate_num_ctx(cls, value: int) -> int:
@@ -549,6 +556,85 @@ class LangfuseSettings(BaseSettings):
         return bool(self.public_key and self.secret_key.get_secret_value())
 
 
+class ApiSettings(BaseSettings):
+    """HTTP-API на FastAPI (M7).
+
+    Точка входа, а не слой логики: здесь только то, что относится к самому
+    HTTP — адрес, происхождения для CORS и таймауты ответов.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="API__", env_file=_ENV_FILE, extra="ignore")
+
+    # 0.0.0.0, а не localhost: в контейнере слушать только loopback значит
+    # быть недоступным снаружи, и порт из compose никуда не ведёт.
+    host: str = "0.0.0.0"
+    port: int = 8000
+
+    # Пусто — CORS не включается вовсе. Веб-фронтенда у проекта нет
+    # (сознательное ограничение брифа), поэтому разрешать происхождения
+    # «на всякий случай» нечему: это была бы дыра без потребителя.
+    cors_origins: tuple[str, ...] = ()
+
+    # Потолок на обычный запрос: поиск отвечает за десятки миллисекунд,
+    # RAG — за единицы секунд. Всё, что дольше, — это сломанная Ollama,
+    # и клиенту лучше получить honest-ошибку, чем висеть.
+    request_timeout_s: float = 60.0
+
+    # Отдельный потолок для агента: на `qwen2.5:3b` цикл доходил до восьми
+    # шагов и минут работы (M6, ADR-030). Общий таймаут пришлось бы задирать
+    # до агентского, и тогда он перестал бы ловить зависший поиск.
+    agent_timeout_s: float = 300.0
+
+    @field_validator("port")
+    @classmethod
+    def _validate_port(cls, value: int) -> int:
+        if not 1 <= value <= 65535:
+            raise ValueError(f"port={value} вне диапазона 1..65535")
+        return value
+
+    @field_validator("request_timeout_s", "agent_timeout_s")
+    @classmethod
+    def _validate_positive_api(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError(f"значение={value} должно быть > 0")
+        return value
+
+
+class BotSettings(BaseSettings):
+    """Telegram-бот на aiogram 3 (M7).
+
+    Токена может не быть: в CI его нет, и на чужой машине тоже. Отсутствие
+    токена — не ошибка конфигурации, а невозможность запустить именно бота,
+    поэтому проверка живёт в точке входа, а не в валидаторе.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="BOT__", env_file=_ENV_FILE, extra="ignore")
+
+    token: SecretStr = SecretStr("")
+
+    # Потолок на фото со штрихкодом. Телефон присылает несколько мегабайт,
+    # и декодировать их целиком незачем — Telegram отдаёт несколько
+    # размеров, берём подходящий. Величина ограничивает память, а не
+    # качество распознавания.
+    max_photo_bytes: int = 5 * 1024 * 1024
+
+    # Сколько ждать ответ конвейера, прежде чем сказать пользователю, что
+    # не уложились. Меньше, чем у API: человек в чате ждёт хуже, чем
+    # скрипт, и минутная пауза читается как «бот сломался».
+    request_timeout_s: float = 120.0
+
+    @property
+    def is_configured(self) -> bool:
+        return bool(self.token.get_secret_value())
+
+    @field_validator("max_photo_bytes")
+    @classmethod
+    def _validate_max_photo_bytes(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError(f"max_photo_bytes={value} должен быть > 0")
+        return value
+
+
 class Settings(BaseSettings):
     """Корневые настройки. Получать только через `get_settings()`."""
 
@@ -566,6 +652,8 @@ class Settings(BaseSettings):
     agent: AgentSettings = Field(default_factory=AgentSettings)
     langfuse: LangfuseSettings = Field(default_factory=LangfuseSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
+    api: ApiSettings = Field(default_factory=ApiSettings)
+    bot: BotSettings = Field(default_factory=BotSettings)
 
     def secret_values(self) -> frozenset[str]:
         """Значения, которые фильтр логирования должен вычищать.
@@ -578,6 +666,11 @@ class Settings(BaseSettings):
             values.add(self.langfuse.secret_key.get_secret_value())
         if self.anthropic.api_key is not None:
             values.add(self.anthropic.api_key.get_secret_value())
+        # Токен бота даёт полный контроль над ботом, и в DEBUG-логах aiogram
+        # он встречается в URL запросов к API Telegram. Без этой строки он
+        # утёк бы в первый же подробный лог.
+        if self.bot.token.get_secret_value():
+            values.add(self.bot.token.get_secret_value())
         return frozenset(v for v in values if v)
 
     def describe(self) -> dict[str, object]:
@@ -599,6 +692,8 @@ class Settings(BaseSettings):
             "ingest_batch_size": self.ingest.batch_size,
             "prompt_version": self.extract.prompt_version,
             "corpus_size": self.extract.corpus_size,
+            "api_bind": f"{self.api.host}:{self.api.port}",
+            "bot_token": "задан" if self.bot.is_configured else "не задан",
         }
 
 

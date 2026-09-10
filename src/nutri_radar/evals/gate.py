@@ -95,10 +95,30 @@ class GoldFingerprint:
 
     @classmethod
     def from_json(cls, data: dict[str, object]) -> GoldFingerprint:
-        by_lang = data.get("by_lang") or {}
+        """Разобрать отпечаток из файла базлайна.
+
+        Поля типизированы как `object`: они пришли с диска, а не из кода.
+        Форма проверяется явно — базлайн читает гейт в CI, и структурно
+        битый файл должен давать понятный отказ, а не падение внутри
+        сравнения метрик через два шага отсюда.
+        """
+        products = data.get("products", 0)
+        if not isinstance(products, int):
+            raise ValueError(f"products в отпечатке эталона не целое: {products!r}")
+
+        raw_by_lang = data.get("by_lang") or {}
+        if not isinstance(raw_by_lang, dict):
+            raise ValueError(f"by_lang в отпечатке эталона не объект: {type(raw_by_lang).__name__}")
+
+        by_lang: dict[str, int] = {}
+        for lang, count in raw_by_lang.items():
+            if not isinstance(count, int):
+                raise ValueError(f"счётчик по языку {lang!r} не целое: {count!r}")
+            by_lang[str(lang)] = count
+
         return cls(
-            products=int(data.get("products", 0)),
-            by_lang={str(k): int(v) for k, v in dict(by_lang).items()},
+            products=products,
+            by_lang=by_lang,
             digest=str(data.get("digest", "")),
         )
 

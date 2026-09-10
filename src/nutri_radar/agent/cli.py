@@ -25,11 +25,8 @@ from nutri_radar.agent.evaluate import (
     write_report,
 )
 from nutri_radar.agent.loop import AgentRun, run_agent
-from nutri_radar.agent.tools import ToolRegistry
-from nutri_radar.agent.tools.lookup_barcode import lookup_barcode_tool
-from nutri_radar.agent.tools.sql_query import sql_query_tool
-from nutri_radar.agent.tools.vector_search import vector_search_tool
-from nutri_radar.config import Settings, get_settings
+from nutri_radar.agent.registry import build_registry
+from nutri_radar.config import get_settings
 from nutri_radar.db.session import dispose_engine
 from nutri_radar.llm.adapters import OllamaLLM
 from nutri_radar.tracing import get_tracer
@@ -67,22 +64,6 @@ def _run[T](coro_factory: Callable[[], Awaitable[T]]) -> T:
             await dispose_engine()
 
     return asyncio.run(main())
-
-
-def build_registry(settings: Settings) -> ToolRegistry:
-    """Собрать реестр инструментов.
-
-    Порядок регистрации не важен — реестр сортирует по имени, чтобы промпт
-    был одинаковым между запусками. Разный порядок инструментов в промпте
-    менял бы поведение модели, и сравнивать прогоны стало бы нельзя.
-    """
-    return ToolRegistry(
-        [
-            lookup_barcode_tool(settings),
-            sql_query_tool(settings),
-            vector_search_tool(settings),
-        ]
-    )
 
 
 def format_run(run: AgentRun) -> str:
