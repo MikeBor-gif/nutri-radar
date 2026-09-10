@@ -25,7 +25,7 @@ from nutri_radar.analytics.dataset import (
     split,
 )
 from nutri_radar.analytics.embeddings import benchmark as benchmark_embeddings
-from nutri_radar.analytics.features import SET_COMMON, SET_FULL, load_scores
+from nutri_radar.analytics.features import SET_COMMON, SET_FULL, Score, load_scores
 from nutri_radar.analytics.report import (
     build_report,
     plot_accuracy_vs_cost,
@@ -254,7 +254,7 @@ def embed(
     settings = get_settings()
     frame = _prepared(target, settings)
 
-    async def run() -> tuple[object, object]:
+    async def run() -> tuple[Score, Score]:
         async with httpx.AsyncClient(base_url=settings.ollama.base_url) as client:
             model = OllamaEmbeddings(client, settings.ollama)
             try:
@@ -285,7 +285,7 @@ def zero_shot(
     settings = get_settings()
     frame = _prepared(target, settings)
 
-    async def run() -> object:
+    async def run() -> Score:
         async with httpx.AsyncClient(base_url=settings.ollama.base_url) as client:
             llm = OllamaLLM(client, settings.ollama)
             return await run_zero_shot(frame, target, llm, settings)

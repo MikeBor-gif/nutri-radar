@@ -175,7 +175,13 @@ def build_search_statement(
     if filters.lang:
         statement = statement.where(Product.ingredients_text_lang == filters.lang)
     if filters.category:
-        statement = statement.where(Product.categories_tags.any(filters.category))
+        # `any()` здесь — компаратор массива Postgres (`= ANY (...)`),
+        # а не одноимённый метод компаратора связи. Различить их mypy
+        # не умеет и берёт второй; при `warn_unused_ignores` подавление
+        # само исчезнет, когда стабы SQLAlchemy это разведут.
+        statement = statement.where(
+            Product.categories_tags.any(filters.category)  # type: ignore[arg-type]
+        )
     if filters.grade_in:
         statement = statement.where(Product.nutriscore_grade.in_(filters.grade_in))
     if filters.nova_in:

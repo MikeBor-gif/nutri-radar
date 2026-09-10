@@ -146,3 +146,15 @@ plugins = ["pydantic.mypy"]
 [[tool.mypy.overrides]]
 module = ["tests.*"]
 disallow_untyped_defs = false
+
+# Научные библиотеки типов не поставляют: у scikit-learn нет ни стабов,
+# ни маркера py.typed, у pandas стабы живут отдельным пакетом `pandas-stubs`
+# и заметно расходятся с рантаймом. Молчание здесь честнее, чем полсотни
+# `type: ignore` по коду или зависимость от стабов, которые придётся
+# синхронизировать вручную.
+#
+# Отключено ровно для этих модулей, а не глобально: `ignore_missing_imports`
+# в корне спрятал бы и настоящую опечатку в импорте.
+[[tool.mypy.overrides]]
+module = ["pandas.*", "sklearn.*", "zxingcpp.*"]
+ignore_missing_imports = true

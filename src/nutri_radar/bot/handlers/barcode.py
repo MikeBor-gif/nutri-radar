@@ -7,7 +7,7 @@ import logging
 
 import httpx
 from aiogram import F, Router
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 
 from nutri_radar.bot import keyboards
 from nutri_radar.bot.errors import log_failure, user_message
@@ -41,7 +41,7 @@ async def _load(code: str, settings: Settings, client: httpx.AsyncClient) -> Pro
     )
 
 
-def _card_markup(card: ProductCard) -> object:
+def _card_markup(card: ProductCard) -> InlineKeyboardMarkup:
     return keyboards.card_keyboard(card.code, has_extraction=card.has_extraction)
 
 

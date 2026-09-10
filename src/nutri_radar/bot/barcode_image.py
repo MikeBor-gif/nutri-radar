@@ -35,16 +35,12 @@ logger = logging.getLogger(__name__)
 # они означают ссылку на промоакцию, а не идентификатор продукта, и их
 # распознавание только добавило бы ложных срабатываний.
 #
-# Перечень кортежем, а не через `|`: в zxing-cpp 3.1 объединение форматов
-# оператором объявлено устаревшим, а `filterwarnings = ["error"]` в конфиге
-# pytest превращает предупреждение в упавший тест. Это ровно то, ради чего
-# такая настройка и стоит.
-FORMATS = (
-    zxingcpp.BarcodeFormat.EAN13,
-    zxingcpp.BarcodeFormat.EAN8,
-    zxingcpp.BarcodeFormat.UPCA,
-    zxingcpp.BarcodeFormat.UPCE,
-)
+# Набор собирается из строки, а не оператором `|` по значениям перечисления:
+# в zxing-cpp 3.1 объединение оператором объявлено устаревшим, а
+# `filterwarnings = ["error"]` в конфиге pytest превращает предупреждение
+# в упавший тест. Кортеж форматов декодер тоже принимает, но его тип
+# не совпадает с объявленным `BarcodeFormats`, и на этом спотыкается mypy.
+FORMATS = zxingcpp.barcode_formats_from_str("EAN-13|EAN-8|UPC-A|UPC-E")
 
 
 def decode_barcode(data: bytes) -> str | None:

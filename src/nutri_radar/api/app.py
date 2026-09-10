@@ -71,7 +71,8 @@ def get_app_settings(request: Request) -> Settings:
     роуте: так тест может собрать приложение с другими настройками, не
     трогая переменные окружения.
     """
-    return request.app.state.settings  # type: ignore[no-any-return]
+    settings: Settings = request.app.state.settings
+    return settings
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
