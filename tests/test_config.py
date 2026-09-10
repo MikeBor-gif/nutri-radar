@@ -14,8 +14,10 @@ from pydantic import BaseModel, ValidationError
 
 from nutri_radar.config import (
     AnthropicSettings,
+    BotSettings,
     DatabaseSettings,
     IngestSettings,
+    LangfuseSettings,
     OllamaSettings,
     Settings,
     get_settings,
@@ -78,13 +80,28 @@ class TestSecrets:
         assert "пароль_бд" not in rendered
         assert "ключ_облака" not in rendered
 
-    def test_secret_values_собирает_оба_секрета(self):
+    def test_secret_values_собирает_все_секреты(self):
+        """Каждая группа с секретом задаётся явно.
+
+        Раньше здесь перечислялись только БД и облако, а `bot` и `langfuse`
+        собирались по умолчанию — то есть **дочитывались из настоящего
+        `.env` разработчика**. Пока эти ключи были пустыми, тест проходил.
+        Стоило появиться токену бота, и он попал в diff упавшего теста,
+        то есть в вывод pytest открытым текстом.
+
+        Урок не про этот тест: `Settings()` без явного перечисления групп
+        зависит от машины, на которой запущен. Системная защита — в conftest.
+        """
         settings = Settings(
             db=DatabaseSettings(password="пароль_бд"),
             anthropic=AnthropicSettings(api_key="ключ_облака"),
+            bot=BotSettings(token="токен_бота"),
+            langfuse=LangfuseSettings(secret_key="ключ_трассировки"),
         )
 
-        assert settings.secret_values() == frozenset({"пароль_бд", "ключ_облака"})
+        assert settings.secret_values() == frozenset(
+            {"пароль_бд", "ключ_облака", "токен_бота", "ключ_трассировки"}
+        )
 
     def test_пустой_ключ_anthropic_считается_отсутствующим(self):
         """В .env.example ключ объявлен пустым — это НЕ заданный ключ."""

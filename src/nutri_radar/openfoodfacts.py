@@ -108,9 +108,9 @@ async def fetch_product(
             headers={"User-Agent": USER_AGENT},
             timeout=timeout_s,
         )
-        response.raise_for_status()
-        payload = response.json()
     except httpx.HTTPError as exc:
+        # Сюда попадают только транспортные отказы: таймаут, разрыв, DNS.
+        # Ответ с кодом ошибки сюда НЕ попадает — он разбирается ниже.
         logger.warning(
             "API OFF недоступен",
             extra=safe_extra(code=code, error=type(exc).__name__),
@@ -120,9 +120,37 @@ async def fetch_product(
         if owns_client:
             await http.aclose()
 
-    # `status` 0 означает «нет такого продукта».
+    # 404 — это «нет такого продукта», а не сбой источника, и различать их
+    # обязательно: сказать «источник недоступен» про несуществующий штрихкод
+    # значит соврать о причине. Проверено на живом API: OFF отдаёт 404
+    # с телом {"status": 0, "status_verbose": "product not found"}.
+    #
+    # На этом код и спотыкался: `raise_for_status()` стоял до разбора тела,
+    # и самый частый случай — продукта нет — приходил пользователю как
+    # временный отказ. Тест мимо этого прошёл, потому что мокал 200
+    # со `status: 0`; такую форму OFF тоже отдаёт, но не в этом случае.
+    if response.status_code == httpx.codes.NOT_FOUND:
+        logger.info("Продукт не найден в OFF", extra=safe_extra(code=code, status=404))
+        return None
+
+    if response.is_error:
+        logger.warning(
+            "API OFF ответил ошибкой",
+            extra=safe_extra(code=code, status=response.status_code),
+        )
+        raise DataSourceError(
+            f"API Open Food Facts ответил {response.status_code}. "
+            "Это не «продукта нет», а отказ самого источника."
+        )
+
+    payload = response.json()
+
+    # `status` 0 при коде 200 — та же «нет такого продукта», другой формой.
     if not payload.get("status"):
-        logger.info("Продукт не найден в OFF", extra=safe_extra(code=code))
+        logger.info(
+            "Продукт не найден в OFF",
+            extra=safe_extra(code=code, status=response.status_code),
+        )
         return None
 
     product = dict(payload.get("product") or {})

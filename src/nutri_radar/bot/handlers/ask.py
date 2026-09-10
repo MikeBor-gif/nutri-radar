@@ -59,7 +59,11 @@ async def ask(message: Message, settings: Settings, http_client: httpx.AsyncClie
         )
 
     text = answer.text
-    if not answer.refused and answer.sources:
+    # Условие по `cited`, а не по `sources`: выдача может быть непустой,
+    # а модель — не сослаться ни на один штрихкод. Приписка «пришлите любой
+    # штрихкод из ответа» под таким ответом отправляет человека искать то,
+    # чего в тексте нет. Поймано на живом прогоне бота.
+    if not answer.refused and answer.cited:
         text += "\n\nПришлите любой штрихкод из ответа, чтобы увидеть карточку продукта."
 
     logger.info(

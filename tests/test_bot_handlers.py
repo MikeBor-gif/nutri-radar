@@ -456,3 +456,49 @@ class TestПриватность:
         recorded = "\n".join(str(record.__dict__) for record in caplog.records)
         assert any(getattr(r, "kind", "") == f"callback:{ACTION_SUGAR}" for r in caplog.records)
         assert CODE not in recorded
+
+
+class TestПодсказкаПроШтрихкоды:
+    """Приписка «пришлите любой штрихкод из ответа» — только когда они есть.
+
+    Поймано на живом прогоне бота: модель ответила рассуждением, не сославшись
+    ни на один штрихкод, а приписка всё равно пришла и отправила человека
+    искать в тексте то, чего там нет. Условие стояло по `sources` — выдаче,
+    отданной модели, — а не по `cited`, тому, что она реально процитировала.
+    """
+
+    @staticmethod
+    def _answer(text: str, sources: list[str]) -> RagAnswer:
+        return RagAnswer(question="вопрос", text=text, sources=sources)
+
+    async def _ask(
+        self,
+        settings: Settings,
+        monkeypatch: pytest.MonkeyPatch,
+        answer: RagAnswer,
+    ) -> FakeMessage:
+        async def _pipeline(question: str, **_kwargs: Any) -> AskResult:
+            return AskResult(search=SearchResult(query=question), answer=answer)
+
+        monkeypatch.setattr(ask_handler, "pipeline_ask", _pipeline)
+        message = FakeMessage(text="какой-нибудь вопрос про состав")
+        await ask_handler.ask(message, settings, object())  # type: ignore[arg-type]
+        return message
+
+    async def test_есть_ссылки_есть_подсказка(
+        self, settings: Settings, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        answer = self._answer(f"Смотрите [{CODE}].", [CODE])
+        message = await self._ask(settings, monkeypatch, answer)
+
+        assert "Пришлите любой штрихкод" in message.last
+
+    async def test_ссылок_нет_подсказки_нет(
+        self, settings: Settings, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Выдача непустая, но модель не процитировала ничего.
+        answer = self._answer("Такого в предоставленных продуктах нет.", [CODE])
+        message = await self._ask(settings, monkeypatch, answer)
+
+        assert message.last == "Такого в предоставленных продуктах нет."
+        assert "Пришлите любой штрихкод" not in message.last

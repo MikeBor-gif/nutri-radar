@@ -103,11 +103,25 @@ def patched_db(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
     return state
 
 
-def _off_client(payload: dict[str, object], *, calls: list[str] | None = None) -> httpx.AsyncClient:
+def _off_client(
+    payload: dict[str, object],
+    *,
+    calls: list[str] | None = None,
+    status: int = 200,
+) -> httpx.AsyncClient:
+    """Подставной Open Food Facts.
+
+    Код ответа задаётся явно и по умолчанию 200 — но именно умолчание
+    однажды и соврало: для несуществующего продукта живой OFF отдаёт **404**
+    с телом «product not found», а тест мокал 200 со `status: 0`. Из-за
+    расхождения фикстуры с реальностью самый частый случай — продукта нет —
+    доезжал до пользователя как «источник недоступен».
+    """
+
     def handler(request: httpx.Request) -> httpx.Response:
         if calls is not None:
             calls.append(str(request.url))
-        return httpx.Response(200, content=json.dumps(payload).encode())
+        return httpx.Response(status, content=json.dumps(payload).encode())
 
     return httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
@@ -241,6 +255,30 @@ class TestЗагрузка:
     async def test_неизвестный_штрихкод_даёт_none(
         self, settings: Settings, patched_db: dict[str, object]
     ) -> None:
+        """Форма ответа взята с живого API, а не придумана.
+
+        OFF отвечает 404 и телом «product not found». Раньше здесь стоял
+        200 со `status: 0`, и тест пропускал баг: `raise_for_status()`
+        превращал 404 в отказ источника, и человек со штрихкодом,
+        которого нет в базе OFF, получал «попробуйте позже».
+        """
+        patched_db["product"] = None
+
+        card = await load_card(
+            CODE,
+            settings=settings,
+            client=_off_client(
+                {"code": CODE, "status": 0, "status_verbose": "product not found"},
+                status=404,
+            ),
+        )
+
+        assert card is None
+
+    async def test_двухсотка_со_статусом_ноль_тоже_означает_отсутствие(
+        self, settings: Settings, patched_db: dict[str, object]
+    ) -> None:
+        """Вторая форма того же ответа: OFF отдаёт и её."""
         patched_db["product"] = None
 
         card = await load_card(
@@ -248,6 +286,15 @@ class TestЗагрузка:
         )
 
         assert card is None
+
+    async def test_ошибка_сервера_не_выдаётся_за_отсутствие(
+        self, settings: Settings, patched_db: dict[str, object]
+    ) -> None:
+        """500 — это отказ источника, и путать его с 404 нельзя."""
+        patched_db["product"] = None
+
+        with pytest.raises(DataSourceError, match="500"):
+            await load_card(CODE, settings=settings, client=_off_client({}, status=500))
 
     async def test_не_штрихкод_отсекается_до_базы(
         self, settings: Settings, patched_db: dict[str, object]
@@ -274,6 +321,33 @@ class TestЗагрузка:
 
         with pytest.raises(DataSourceError):
             await load_card(CODE, settings=settings, client=client)
+
+
+class TestРазметка:
+    def test_html_снимается_из_состава(self) -> None:
+        """Треть корпуса приходит с `<span class="allergen">`.
+
+        Поймано на живом боте: карточка показывала теги пользователю как
+        есть. Слово-аллерген при этом обязано остаться — теряется только
+        обёртка вокруг него.
+        """
+        card = card_from_corpus(
+            _product(ingredients_text='<span class="allergen">Oats</span> (69%), Sugar'),
+            _extraction(),
+        )
+
+        assert card.ingredients_text is not None
+        assert "<span" not in card.ingredients_text
+        assert "</span>" not in card.ingredients_text
+        assert "Oats" in card.ingredients_text
+        assert "Sugar" in card.ingredients_text
+
+    def test_html_снимается_и_у_карточки_из_живого_апи(self) -> None:
+        card = card_from_off(
+            product_card.OffProduct(code=CODE, ingredients_text="Sucre, <b>NOISETTES</b> 13%")
+        )
+
+        assert card.ingredients_text == "Sucre, NOISETTES 13%"
 
 
 class TestЗаголовок:

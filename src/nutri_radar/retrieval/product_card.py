@@ -31,6 +31,7 @@ from nutri_radar.db.repositories.product import ProductRepository, ProductSummar
 from nutri_radar.db.session import get_session
 from nutri_radar.logging import safe_extra
 from nutri_radar.openfoodfacts import OffProduct, fetch_product, normalize_barcode
+from nutri_radar.retrieval.profile import strip_markup
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +101,10 @@ def card_from_corpus(
         product_name=product.product_name,
         brands=product.brands,
         lang=product.ingredients_text_lang or product.lang,
-        ingredients_text=product.ingredients_text,
+        # Разметка снимается: треть корпуса приходит с
+        # `<span class="allergen">`, и показывать её человеку — мусор.
+        # Само слово-аллерген при этом остаётся, теряется только обёртка.
+        ingredients_text=strip_markup(product.ingredients_text) or None,
         nutriscore_grade=product.nutriscore_grade,
         nova_group=product.nova_group,
         distinct_sugar_forms=extraction.distinct_sugar_forms if extraction else None,
@@ -125,7 +129,8 @@ def card_from_off(product: OffProduct) -> ProductCard:
         source=CardSource.OPENFOODFACTS,
         product_name=product.product_name,
         brands=product.brands,
-        ingredients_text=product.ingredients_text,
+        # Живой API отдаёт ту же разметку, что и дамп.
+        ingredients_text=strip_markup(product.ingredients_text) or None,
         nutriscore_grade=product.nutriscore_grade,
         nova_group=product.nova_group,
     )
