@@ -157,12 +157,17 @@ class TestЭкземплярНаЦикл:
         вместо работы.
         """
 
-        async def take() -> int:
-            return id(get_runtime(settings))
+        async def take() -> ModelRuntime:
+            return get_runtime(settings)
 
+        # Сравниваются сами объекты, а не их `id()`. Времена жизни двух
+        # очередей не пересекались бы, а CPython переиспользует адреса
+        # освобождённых объектов — тест на `id()` проходил бы или падал
+        # в зависимости от истории аллокаций в прогоне. Ссылки на оба
+        # объекта живы до конца проверки, поэтому совпасть они не могут.
         first = asyncio.run(take())
         second = asyncio.run(take())
-        assert first != second
+        assert first is not second
 
     async def test_внутри_одного_цикла_очередь_одна(self, settings: Settings) -> None:
         assert get_runtime(settings) is get_runtime(settings)
