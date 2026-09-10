@@ -16,14 +16,12 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 
-import anthropic
 import httpx
 import typer
 
 from nutri_radar.config import Settings, get_settings
 from nutri_radar.db.repositories.extraction import ExtractionRepository
 from nutri_radar.db.session import dispose_engine, get_session
-from nutri_radar.errors import ConfigurationError
 from nutri_radar.extract import benchmark as benchmark_module
 from nutri_radar.extract.corpus import (
     CorpusItem,
@@ -42,9 +40,7 @@ from nutri_radar.extract.normalize import (
 from nutri_radar.extract.prompts import available_versions
 from nutri_radar.extract.runner import ExtractionRunResult, format_result, run_extraction
 from nutri_radar.extract.schemas import Ingredient
-from nutri_radar.llm.adapters.anthropic import AnthropicLLM
-from nutri_radar.llm.adapters.ollama import OllamaLLM
-from nutri_radar.llm.ports import StructuredLLM
+from nutri_radar.llm.factory import build_llm
 
 logger = logging.getLogger(__name__)
 
@@ -76,31 +72,6 @@ def _run[T](coro_factory: Callable[[], Awaitable[T]]) -> T:
             await dispose_engine()
 
     return asyncio.run(_main())
-
-
-def build_llm(settings: Settings, client: httpx.AsyncClient) -> StructuredLLM:
-    """Единственное место, где выбирается конкретный провайдер."""
-    match settings.llm.provider:
-        case "ollama":
-            return OllamaLLM(client, settings.ollama)
-        case "anthropic":
-            # Ключ проверяем здесь, а не внутри адаптера: composition root —
-            # единственное место, которое знает про выбор провайдера, и отказ
-            # должен быть понятным до первого запроса, а не на сотом продукте.
-            if settings.anthropic.api_key is None:
-                raise ConfigurationError(
-                    "LLM__PROVIDER=anthropic, но ANTHROPIC__API_KEY не задан. "
-                    "Укажите ключ в .env или переключитесь на LLM__PROVIDER=ollama."
-                )
-            return AnthropicLLM(
-                anthropic.AsyncAnthropic(
-                    api_key=settings.anthropic.api_key.get_secret_value(),
-                    timeout=settings.anthropic.timeout_s,
-                ),
-                settings.anthropic,
-            )
-        case unknown:
-            raise ConfigurationError(f"Неизвестный провайдер LLM: {unknown}")
 
 
 def _http_client(settings: Settings) -> httpx.AsyncClient:

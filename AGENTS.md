@@ -83,7 +83,8 @@ nutri-radar/
 │   ├── llm/                   ✓ ОБЩЕЕ: порты и адаптеры моделей (M2)
 │   │   ├── ports.py          ✓   StructuredLLM и EmbeddingModel
 │   │   ├── adapters/         ✓   ollama, anthropic, fake
-│   │   └── runtime.py        ✓   очередь к моделям: одна в VRAM за раз (M7)
+│   │   ├── runtime.py        ✓   очередь к моделям: одна в VRAM за раз (M7)
+│   │   └── factory.py        ✓   выбор провайдера по LLM__PROVIDER (M7)
 │   ├── ingest/                ✓ СЛАЙС: дамп, DuckDB-выборка, дельты
 │   │   ├── probe.py           ✓   разведка схемы дампа без скачивания
 │   │   ├── download.py        ✓   идемпотентное скачивание с докачкой
@@ -158,6 +159,7 @@ nutri-radar/
 | `alembic/versions/` | история схемы БД |
 | `src/nutri_radar/extract/schemas.py` | *(M2)* Pydantic-схема выхода LLM = JSON-схема генерации |
 | `src/nutri_radar/llm/ports.py` | *(M2)* порты внешних моделей; точка подмены провайдера |
+| `src/nutri_radar/llm/factory.py` | *(M7)* **единственное место, где выбирается провайдер** по `LLM__PROVIDER`; возвращает порты, а не адаптеры |
 | `data/evals/extraction_gold.jsonl` | *(M3)* эталонная разметка; **создаётся только человеком** — сейчас нарушено, см. ADR-026 |
 | `src/nutri_radar/analytics/dataset.py` | *(M4)* выгрузка без нутриентов: защита от утечки структурная, а не дисциплинарная |
 | `src/nutri_radar/analytics/report.py` | *(M4)* таблица «точность против стоимости» — ответ майлстоуна |

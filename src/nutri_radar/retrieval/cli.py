@@ -16,7 +16,8 @@ import typer
 
 from nutri_radar.config import get_settings
 from nutri_radar.db.session import dispose_engine
-from nutri_radar.llm.adapters import OllamaEmbeddings, OllamaLLM
+from nutri_radar.llm.adapters import OllamaEmbeddings
+from nutri_radar.llm.factory import build_llm
 from nutri_radar.llm.runtime import get_runtime
 from nutri_radar.retrieval.embed import (
     build_index,
@@ -291,7 +292,7 @@ def evaluate(
                 results.append((gold, result))
 
             if with_rag:
-                llm = OllamaLLM(client, settings.ollama)
+                llm = build_llm(settings, client)
                 # Одно удержание очереди на весь цикл: между вопросами
                 # модель не выгружается, иначе прогон по эталону превратился
                 # бы в двадцать перезагрузок весов.

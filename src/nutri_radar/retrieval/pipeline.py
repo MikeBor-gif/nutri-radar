@@ -24,7 +24,7 @@ from dataclasses import dataclass
 import httpx
 
 from nutri_radar.config import Settings, get_settings
-from nutri_radar.llm.adapters import OllamaEmbeddings, OllamaLLM
+from nutri_radar.llm.factory import build_embeddings, build_llm
 from nutri_radar.llm.runtime import get_runtime
 from nutri_radar.logging import safe_extra
 from nutri_radar.retrieval.rag import RagAnswer
@@ -68,7 +68,7 @@ async def embed_texts(
     if not texts:
         return []
 
-    model = OllamaEmbeddings(client, settings.ollama)
+    model = build_embeddings(settings, client)
     runtime = get_runtime(settings)
     started = time.perf_counter()
     async with runtime.hold(model.model_name, unload=model.unload):
@@ -138,7 +138,7 @@ async def ask(
     )
     embed_and_search = time.perf_counter() - started
 
-    llm = OllamaLLM(client, settings.ollama)
+    llm = build_llm(settings, client)
     runtime = get_runtime(settings)
     async with runtime.hold(llm.model_name):
         answer = await rag_answer(question, result, llm, settings)
