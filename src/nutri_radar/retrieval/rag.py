@@ -17,6 +17,23 @@
 **Формулировки описательные.** Границы продукта из брифа: «в составе три
 разные формы сахара», а не «вредно». Правило записано в промпт и проверяется
 тестом на запрещённых словах.
+
+**Язык ответа принуждается схемой, а не просьбой — начиная с `rag_v2`.**
+Правило «отвечай на языке вопроса» в `rag_v1` было и раньше, пунктом 5.
+Замер показал, что модель на 3B нарушает его в 23,5% случаев, и все
+нарушения одного вида: русский вопрос, английский ответ. Поэтому в схему
+ответа добавлено поле `language`, которое модель обязана заполнить **до**
+`answer` — тот же приём, что вытащил извлечение на M2: схема как параметр
+генерации надёжнее просьбы в тексте.
+
+Принуждение асимметрично, и это не небрежность. Кириллица в вопросе
+определяет язык однозначно — ни один латинский язык её не использует,
+— и схема сужается до `enum: ["ru"]`. Вопрос на латинице может быть
+английским, немецким или французским, различить их алфавитом нельзя,
+и навязать ему «английский» значило бы сделать хуже, чем `rag_v1`:
+там модель хотя бы имела шанс ответить по-немецки. Для таких вопросов
+поле остаётся свободной строкой, и структурным остаётся только
+требование назвать язык до ответа.
 """
 
 from __future__ import annotations
@@ -29,6 +46,7 @@ from nutri_radar.config import Settings, get_settings
 from nutri_radar.errors import ExtractionError, LLMUnavailableError
 from nutri_radar.llm.ports import StructuredLLM
 from nutri_radar.logging import safe_extra
+from nutri_radar.retrieval.language import LANGUAGE_NAMES, is_cyrillic
 from nutri_radar.retrieval.prompts import load_prompt
 from nutri_radar.retrieval.search import SearchHit, SearchResult
 
@@ -101,6 +119,62 @@ def format_products(hits: list[SearchHit]) -> str:
     return "\n\n".join(blocks)
 
 
+def language_rule(question: str) -> tuple[str, list[str]]:
+    """Правило о языке для промпта и допустимые значения поля `language`.
+
+    Returns:
+        Пара «текст правила, список разрешённых языков». Пустой список
+        означает «язык вопроса неизвестен»: поле остаётся свободным.
+
+    Note:
+        Возвращается ровно то, что уходит в промпт и в схему, — одной
+        функцией, чтобы они не могли разойтись. Промпт, называющий
+        русский, и схема, разрешающая что угодно, дали бы принуждение
+        только на бумаге.
+    """
+    if not is_cyrillic(question):
+        return (
+            "Answer in the same language as the question. If the question is "
+            "in German, answer in German; if in French, answer in French.",
+            [],
+        )
+    name = LANGUAGE_NAMES["ru"]
+    return (f"The question is written in {name}. Your answer MUST be in {name}.", ["ru"])
+
+
+def answer_schema(allowed_languages: list[str] | None = None) -> dict:
+    """JSON-схема ответа.
+
+    Args:
+        allowed_languages: чем ограничить поле `language`. Пустой список
+            или `None` — поле не добавляется вовсе (поведение `rag_v1`).
+            Непустой — поле идёт **первым** и сужается до перечисленного.
+
+    Note:
+        Порядок ключей здесь значим. Модель заполняет поля в том порядке,
+        в котором они объявлены, и `language` перед `answer` заставляет
+        её назвать язык до того, как она напишет первое слово текста.
+        Поменять местами значило бы получить поле-отметку задним числом.
+    """
+    properties: dict = {}
+    required: list[str] = []
+    if allowed_languages:
+        properties["language"] = {"type": "string", "enum": list(allowed_languages)}
+        required.append("language")
+    properties["answer"] = {"type": "string"}
+    # Модель обязана перечислить использованные штрихкоды отдельным
+    # полем, а не только в тексте. Расхождение между полем и текстом
+    # — сигнал, что ссылки в тексте выдуманы.
+    properties["sources"] = {"type": "array", "items": {"type": "string"}}
+    required += ["answer", "sources"]
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": required,
+        "additionalProperties": False,
+    }
+
+
 def relevant_hits(
     result: SearchResult, *, min_similarity: float = MIN_SIMILARITY
 ) -> list[SearchHit]:
@@ -148,19 +222,19 @@ async def answer(
             model_name=llm.model_name,
         )
 
-    prompt = load_prompt(version).render(question=question, products=format_products(hits))
-    schema = {
-        "type": "object",
-        "properties": {
-            "answer": {"type": "string"},
-            # Модель обязана перечислить использованные штрихкоды отдельным
-            # полем, а не только в тексте. Расхождение между полем и текстом
-            # — сигнал, что ссылки в тексте выдуманы.
-            "sources": {"type": "array", "items": {"type": "string"}},
-        },
-        "required": ["answer", "sources"],
-        "additionalProperties": False,
-    }
+    template = load_prompt(version)
+    rule, allowed = language_rule(question) if template.forces_language else ("", [])
+    prompt = template.render(question=question, products=format_products(hits), language_rule=rule)
+    schema = answer_schema(allowed)
+    if template.forces_language:
+        logger.debug(
+            "Язык ответа принуждается схемой",
+            extra=safe_extra(
+                prompt_version=version,
+                allowed=allowed or "любой",
+                question=question[:120],
+            ),
+        )
 
     try:
         response = await llm.generate(prompt, json_schema=schema)

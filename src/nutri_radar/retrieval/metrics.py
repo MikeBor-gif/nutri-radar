@@ -43,7 +43,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -53,6 +52,11 @@ from sqlalchemy import text
 from nutri_radar.config import Settings, get_settings
 from nutri_radar.db.session import get_session
 from nutri_radar.logging import safe_extra
+from nutri_radar.retrieval.language import (
+    RESOLVABLE_LANGUAGES,
+    UNDETERMINED,
+    detect_language,
+)
 from nutri_radar.retrieval.rag import RagAnswer
 from nutri_radar.retrieval.search import SearchResult
 
@@ -60,22 +64,6 @@ logger = logging.getLogger(__name__)
 
 QUERIES_FILE = Path("data/retrieval/queries.jsonl")
 OUT_OF_DOMAIN_FILE = Path("data/retrieval/out_of_domain.jsonl")
-
-# Язык не определён: ответ слишком короткий, чтобы судить по алфавиту.
-# Отдельное значение, а не «промах»: не определили и ответили не на том
-# языке — разные события, и смешивать их значило бы мерить длину ответа.
-UNDETERMINED = ""
-
-# Языки, которые признак «кириллица против латиницы» вообще способен
-# различить. Немецкий и французский в эталоне есть, и на них признак
-# всегда отвечает «en» — не потому, что модель ответила по-английски,
-# а потому, что алфавит у них общий. Считать такие запросы промахами
-# значило бы записать в метрику ограничение измерительного прибора;
-# они выводятся отдельным числом.
-RESOLVABLE_LANGUAGES = frozenset({"ru", "en"})
-
-_CYRILLIC = re.compile(r"[\u0400-\u04FF]")
-_LATIN = re.compile(r"[A-Za-z]")
 
 
 class GoldQuery(BaseModel):
@@ -171,42 +159,6 @@ class PropertyScore:
     @property
     def precision(self) -> float:
         return self.matching / self.returned if self.returned else 0.0
-
-
-def detect_language(text: str, *, min_letters: int) -> str:
-    """Определить язык текста по алфавиту: кириллица против латиницы.
-
-    **Почему признак, а не библиотека.** Эталонные запросы написаны
-    на русском и английском, и различить эти два языка надёжнее по
-    алфавиту, чем статистической моделью: библиотеки определения языка
-    на коротком тексте ошибаются, а короткий текст здесь — норма.
-    Признак по алфавиту на этой паре языков не ошибается никогда:
-    у них не пересекаются буквы.
-
-    Цена — узость, и она уже проявилась. В эталоне поиска есть запросы
-    на немецком и французском, и на них признак отвечает `"en"` всегда:
-    алфавит у этих языков общий с английским. Поэтому различимые языки
-    перечислены явно в `RESOLVABLE_LANGUAGES`, а остальные не попадают
-    в долю совпадений вовсе — ни в числитель, ни в знаменатель. Записать
-    их в промахи значило бы измерить ограничение прибора, а не систему.
-
-    Args:
-        text: ответ модели.
-        min_letters: сколько букв должно быть в тексте, чтобы судить
-            о языке. Ниже порога возвращается `UNDETERMINED`.
-
-    Returns:
-        `"ru"`, `"en"` или `UNDETERMINED`.
-    """
-    cyrillic = len(_CYRILLIC.findall(text))
-    latin = len(_LATIN.findall(text))
-    if cyrillic + latin < min_letters:
-        return UNDETERMINED
-    if cyrillic == latin:
-        # Ровно поровну — это не «оба», это «непонятно». Выбрать один
-        # означало бы записать монетку в метрику.
-        return UNDETERMINED
-    return "ru" if cyrillic > latin else "en"
 
 
 @dataclass
