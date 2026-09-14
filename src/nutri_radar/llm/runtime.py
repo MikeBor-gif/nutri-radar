@@ -165,17 +165,30 @@ class ModelRuntime:
 
     async def _switch_to(self, model: str) -> None:
         """Сменить загруженную модель. Вызывается под удержанным условием."""
+        started = time.perf_counter()
         previous = self._current
         if previous is not None:
             await self._unload(previous)
             self._switches += 1
         self._loads += 1
         self._current = model
+        # Длительность — в самой записи о переключении, а не только
+        # в агрегате замера. Цену смены модели надо видеть по логу боевого
+        # прогона, где никакого замера не запускали: именно там она
+        # объясняет, почему один вопрос ответился за пятнадцать секунд,
+        # а следующий за полторы минуты.
+        #
+        # Меряется выгрузка предыдущей модели, а не загрузка следующей:
+        # Ollama грузит веса лениво, при первом обращении, и здесь его
+        # ещё не было. Полная цена переключения — это число плюс задержка
+        # первого вызова к новой модели, и `switching.py` считает именно
+        # её. Путать их нельзя, поэтому поле названо `unload_s`.
         logger.info(
             "Активная модель переключена",
             extra=safe_extra(
                 model=model,
                 previous=previous or "—",
+                unload_s=round(time.perf_counter() - started, 3),
                 switches=self._switches,
                 loads=self._loads,
             ),

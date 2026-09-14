@@ -210,6 +210,7 @@ async def answer(
             "RAG отказался: релевантного не нашлось",
             extra=safe_extra(
                 question=question[:120],
+                prompt_version=version,
                 found=len(result.hits),
                 min_similarity=min_similarity,
             ),
@@ -241,7 +242,11 @@ async def answer(
     except (LLMUnavailableError, ExtractionError) as exc:
         logger.warning(
             "Модель не ответила — отказ вместо выдумки",
-            extra=safe_extra(question=question[:120], error=type(exc).__name__),
+            extra=safe_extra(
+                question=question[:120],
+                prompt_version=version,
+                error=type(exc).__name__,
+            ),
         )
         return RagAnswer(
             question=question,
@@ -286,8 +291,12 @@ async def answer(
         )
     logger.info(
         "RAG ответил",
+        # Версия промпта — в КАЖДОЙ записи, а не только в шапке прогона.
+        # Два прогона разных версий дают одинаковые с виду строки лога,
+        # и разобрать потом, где чьё, можно только по этому полю.
         extra=safe_extra(
             question=question[:120],
+            prompt_version=version,
             sources=len(answer_obj.sources),
             cited=len(answer_obj.cited),
             invented=len(invented),
