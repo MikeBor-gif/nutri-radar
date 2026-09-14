@@ -24,6 +24,18 @@
 аномально долгая генерация не должна определять число, которое пойдёт
 в README.
 
+**Оба режима меряются по одним правилам, и это оказалось не бесплатно.**
+Первая версия замера запускала таймер только вокруг поиска и генерации,
+а векторизацию и переключение на модель генерации режим «подряд» платил
+вне таймера. Режим с чередованием платил их внутри. Разница режимов
+переставала быть разницей в переключениях: в неё попадала работа,
+которую один режим просто не засекал, и цена переключения выходила
+завышенной примерно на четверть. Теперь общая работа режима «подряд» —
+векторизация плюс переключение — засекается отдельным счётчиком
+и раскладывается по вопросам поровну: платится она один раз на весь
+батч, и приписывать её целиком первому вопросу было бы так же неверно,
+как не считать вовсе.
+
 **Прогрев обязателен.** Первое обращение к модели после старта Ollama
 читает веса с диска, а не из кеша страниц, и стоит заметно дороже
 последующих. Замер без прогрева измерил бы состояние дискового кеша.
@@ -58,6 +70,11 @@ class SwitchRun:
 
     mode: str
     latencies: list[float] = field(default_factory=list)
+    # Работа, которую режим платит один раз на весь прогон, а не на каждый
+    # вопрос: векторизация всех вопросов разом и переключение на модель
+    # генерации. У режима с чередованием она равна нулю — там всё
+    # per-question и уже сидит в `latencies`.
+    shared_s: float = 0.0
     # Переключения и загрузки берутся из очереди моделей, а не считаются
     # здесь заново: очередь — единственное место, которое знает правду
     # о том, что реально произошло с VRAM.
@@ -65,15 +82,28 @@ class SwitchRun:
     loads: int = 0
 
     @property
-    def median(self) -> float:
+    def per_question(self) -> list[float]:
+        """Время на вопрос с учётом разовой работы режима.
+
+        Разовая работа делится поровну: она платится один раз на батч,
+        и приписать её целиком первому вопросу было бы так же неверно,
+        как не считать вовсе.
+        """
         if not self.latencies:
+            return []
+        share = self.shared_s / len(self.latencies)
+        return [value + share for value in self.latencies]
+
+    @property
+    def median(self) -> float:
+        values = sorted(self.per_question)
+        if not values:
             return 0.0
-        values = sorted(self.latencies)
         return values[len(values) // 2]
 
     @property
     def total(self) -> float:
-        return sum(self.latencies)
+        return sum(self.latencies) + self.shared_s
 
 
 @dataclass
@@ -117,12 +147,13 @@ class SwitchBenchmark:
                 f"Вопросов: {self.questions}. Модель генерации: `{self.model}`, "
                 f"модель эмбеддингов: `{self.embedding_model}`.",
                 "",
-                "| Режим | Медиана на вопрос | Всего | Переключений |",
-                "|---|---|---|---|",
+                "| Режим | Медиана на вопрос | Всего | Разовая работа | Переключений |",
+                "|---|---|---|---|---|",
                 f"| Подряд | {self.batched.median:.1f} с | {self.batched.total:.1f} с "
-                f"| {self.batched.switches} |",
+                f"| {self.batched.shared_s:.1f} с | {self.batched.switches} |",
                 f"| С чередованием | {self.alternating.median:.1f} с "
-                f"| {self.alternating.total:.1f} с | {self.alternating.switches} |",
+                f"| {self.alternating.total:.1f} с | {self.alternating.shared_s:.1f} с "
+                f"| {self.alternating.switches} |",
                 "",
                 "| Величина | Значение |",
                 "|---|---|",
@@ -145,6 +176,14 @@ class SwitchBenchmark:
                 "**Почему медиана, а не среднее.** Одна аномально долгая "
                 "генерация не должна определять число, которое пойдёт в README "
                 "как характеристика железа.",
+                "",
+                "**Столбец «разовая работа» — про честность сравнения.** Режим "
+                "«подряд» векторизует все вопросы одним заходом и переключается "
+                "на модель генерации один раз; это его работа, и она входит "
+                "в замер, разложенная по вопросам поровну. Первая версия этого "
+                "замера её не засекала, и цена переключения выходила завышенной "
+                "примерно на четверть: в разницу режимов попадало то, на что "
+                "один из них просто не посмотрел на часы.",
             ]
         )
 
@@ -161,15 +200,22 @@ async def _answer_batched(
     before_switches, before_loads = runtime.switches, runtime.loads
     run = SwitchRun(mode=BATCHED)
 
+    # Векторизация и переключение на модель генерации — внутри замера.
+    # Режим с чередованием платит их на каждый вопрос и засекает; если
+    # здесь их не засечь, разница режимов измерит не переключения,
+    # а то, что один режим не посмотрел на свои часы.
+    started_shared = time.perf_counter()
     vectors = await embed_texts(questions, client=client, settings=settings)
     llm = build_llm(settings, client)
     async with runtime.hold(llm.model_name):
+        shared = time.perf_counter() - started_shared
         for question, vector in zip(questions, vectors, strict=True):
             started = time.perf_counter()
             result = await search_vectors(vector, query=question, limit=top_k, settings=settings)
             await rag_answer(question, result, llm, settings)
             run.latencies.append(time.perf_counter() - started)
 
+    run.shared_s = shared
     run.switches = runtime.switches - before_switches
     run.loads = runtime.loads - before_loads
     logger.info(
@@ -177,6 +223,7 @@ async def _answer_batched(
         extra=safe_extra(
             questions=len(questions),
             switches=run.switches,
+            shared_s=round(run.shared_s, 2),
             median_s=round(run.median, 2),
         ),
     )
