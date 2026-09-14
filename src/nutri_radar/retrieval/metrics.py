@@ -174,8 +174,15 @@ class LanguageScore:
     # Из эталона. Пустой — у запроса не проставлен язык, такие в долю
     # не входят вовсе.
     expected: str
-    # Из ответа, по алфавиту. `UNDETERMINED`, если ответ слишком короткий.
+    # Из ответа, по алфавиту. `UNDETERMINED`, если ответ слишком короткий
+    # или система отказалась отвечать.
     actual: str
+    # Отказалась ли система отвечать. Отдельным полем, а не выведенным
+    # из `actual == UNDETERMINED`: «система промолчала» и «ответ короче
+    # порога» — разные события с разными причинами, и в прогоне `rag_v2`
+    # их слияние дало строку отчёта «язык не определился: 14», за которой
+    # на самом деле стояли четырнадцать отказов.
+    refused: bool = False
 
     @property
     def is_resolvable(self) -> bool:
@@ -322,14 +329,27 @@ class RetrievalReport:
         return sum(1 for item in self.out_of_domain if item.refused) / len(self.out_of_domain)
 
     @property
-    def language_undetermined(self) -> int:
-        """Ответы, где язык вопроса различим, а язык ответа определить не вышло.
+    def language_refused(self) -> int:
+        """Запросы, где система отказалась отвечать.
 
-        Отказы и слишком короткие ответы. Считаются отдельно: промах и
-        «нечего мерить» — разные события.
+        Языка у отказа нет: его текст — константа проекта, а не выбор
+        модели. Считается отдельно от коротких ответов, потому что
+        причина другая и лечится другим.
+        """
+        return sum(1 for item in self.languages if item.is_resolvable and item.refused)
+
+    @property
+    def language_undetermined(self) -> int:
+        """Ответы, которые есть, но слишком коротки, чтобы судить о языке.
+
+        Отказы сюда **не входят**: строка отчёта «язык не определился»,
+        за которой стоят отказы, а не короткие ответы, читается неверно
+        и однажды уже прочиталась неверно.
         """
         return sum(
-            1 for item in self.languages if item.is_resolvable and item.actual == UNDETERMINED
+            1
+            for item in self.languages
+            if item.is_resolvable and not item.refused and item.actual == UNDETERMINED
         )
 
     @property
@@ -466,7 +486,9 @@ def score_language(query: GoldQuery, answer: RagAnswer, *, min_letters: int) -> 
     actual = (
         UNDETERMINED if answer.refused else detect_language(answer.text, min_letters=min_letters)
     )
-    score = LanguageScore(question=query.query, expected=query.lang, actual=actual)
+    score = LanguageScore(
+        question=query.query, expected=query.lang, actual=actual, refused=answer.refused
+    )
     logger.info(
         "Язык ответа проверен",
         extra=safe_extra(
@@ -512,7 +534,8 @@ def _language_section(report: RetrievalReport) -> list[str]:
         "|---|---|",
         f"| Ответов на языке вопроса | {report.language_match_share:.1%} |",
         f"| Запросов в знаменателе | {len(comparable)} из {len(report.languages)} |",
-        f"| Язык ответа не определился | {report.language_undetermined} |",
+        f"| Система отказалась отвечать | {report.language_refused} |",
+        f"| Ответ короче порога, язык не определился | {report.language_undetermined} |",
         f"| Язык вопроса неразличим признаком | {report.language_unresolvable} |",
         "",
         "Правило «отвечай на языке вопроса» **уже есть в промпте** — пунктом 5. "
@@ -529,6 +552,11 @@ def _language_section(report: RetrievalReport) -> list[str]:
         "измерить ограничение прибора, а не систему. Ответы, где букв меньше "
         "порога, тоже в долю не входят — иначе метрика мерила бы длину ответа. "
         "Язык вопроса берётся из поля `lang` эталона, а не угадывается.",
+        "",
+        "Отказы выведены отдельной строкой, а не свалены в «не определился». "
+        "У отказа нет языка: его текст — константа проекта, а не выбор модели. "
+        "Строка «язык не определился», за которой стоят отказы, читается как "
+        "«ответы вышли слишком короткими» — и однажды уже прочиталась так.",
     ]
 
     mismatched = [score for score in comparable if not score.matched]

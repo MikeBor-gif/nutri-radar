@@ -150,6 +150,30 @@ def test_undetermined_and_unresolvable_are_counted_apart() -> None:
     assert report.language_match_share == 0.0
 
 
+def test_refusals_are_counted_apart_from_short_answers() -> None:
+    """Отказ и короткий ответ — разные причины, и в отчёте это разные строки.
+
+    В прогоне `rag_v2` их слияние дало строку «язык не определился: 14»,
+    за которой стояли четырнадцать отказов, а не четырнадцать коротких
+    ответов. Читается это прямо противоположно тому, что произошло.
+    """
+    report = RetrievalReport(k=5)
+    report.languages = [
+        LanguageScore(question="q1", expected="ru", actual=UNDETERMINED, refused=True),
+        LanguageScore(question="q2", expected="ru", actual=UNDETERMINED, refused=False),
+        LanguageScore(question="q3", expected="ru", actual="ru"),
+    ]
+    assert report.language_refused == 1
+    assert report.language_undetermined == 1
+    assert report.language_match_share == pytest.approx(1.0)
+
+
+def test_score_language_marks_refusal() -> None:
+    gold = GoldQuery(query="шоколад", expected=["1"], lang="ru")
+    score = score_language(gold, _answer(REFUSAL, refused=True), min_letters=20)
+    assert score.refused is True
+
+
 # --- вопросы вне домена -----------------------------------------------
 
 
@@ -219,6 +243,16 @@ def _filled_report() -> RetrievalReport:
         RefusalScore(question="какая погода", kind="вне темы", refused=True),
     ]
     return report
+
+
+def test_report_separates_refusals_from_short_answers() -> None:
+    report = _filled_report()
+    report.languages.append(
+        LanguageScore(question="отказ", expected="ru", actual=UNDETERMINED, refused=True)
+    )
+    text = format_report(report)
+    assert "| Система отказалась отвечать | 1 |" in text
+    assert "| Ответ короче порога, язык не определился | 0 |" in text
 
 
 def test_report_contains_both_new_values() -> None:

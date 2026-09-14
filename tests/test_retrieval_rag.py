@@ -30,7 +30,9 @@ from nutri_radar.retrieval.rag import (
     REFUSAL,
     RagAnswer,
     answer,
+    answer_schema,
     format_products,
+    language_rule,
     relevant_hits,
 )
 from nutri_radar.retrieval.search import SearchHit, SearchResult
@@ -303,3 +305,52 @@ class TestЭталонныеЗапросы:
 
         assert [item.query for item in queries] == ["шоколад", "йогурт"]
         assert queries[0].author == "Mikhail"
+
+
+class TestПринуждениеЯзыка:
+    """Поле `language` в схеме — структурное принуждение из `rag_v2`.
+
+    Проверяется свойство, которое однажды уже разошлось с описанием:
+    промпт требовал поле, а схема его не допускала, и для латинских
+    вопросов принуждения не было ни в каком виде. Проверять надо именно
+    наличие поля, а не текст промпта: просьба в промпте свойством
+    системы не является — это и есть измеренный вывод майлстоуна.
+    """
+
+    def test_кириллический_вопрос_сужается_до_русского(self) -> None:
+        rule, allowed = language_rule("шоколад с пальмовым маслом")
+        assert allowed == ["ru"]
+        assert "Russian" in rule
+
+    def test_латинский_вопрос_не_навязывает_английский(self) -> None:
+        """Навязать немецкому вопросу английский было бы хуже `rag_v1`."""
+        _, allowed = language_rule("Schokolade mit Haselnüssen")
+        assert allowed == []
+
+    def test_поле_есть_и_для_латиницы(self) -> None:
+        """Список пуст — но поле остаётся, свободной строкой.
+
+        «Поля нет» и «поле есть, значения любые» — разные вещи, и первая
+        версия молча выбирала первое там, где описание обещало второе.
+        """
+        schema = answer_schema([], require_language=True)
+        assert "language" in schema["properties"]
+        assert "enum" not in schema["properties"]["language"]
+        assert "language" in schema["required"]
+
+    def test_поле_идёт_первым(self) -> None:
+        """Порядок значим: назвать язык надо ДО первого слова ответа."""
+        schema = answer_schema(["ru"], require_language=True)
+        assert list(schema["properties"]) == ["language", "answer", "sources"]
+
+    def test_без_принуждения_схема_как_в_rag_v1(self) -> None:
+        """`rag_v1` не должен измениться: на нём посчитаны опубликованные числа."""
+        schema = answer_schema(["ru"], require_language=False)
+        assert list(schema["properties"]) == ["answer", "sources"]
+        assert schema["required"] == ["answer", "sources"]
+
+    def test_требование_про_json_живёт_в_том_же_тексте(self) -> None:
+        """Промпт и схему возвращает одна функция — разойтись им негде."""
+        for question in ("шоколад", "chocolate", "Schokolade mit Nüssen"):
+            rule, _ = language_rule(question)
+            assert "`language`" in rule

@@ -16,10 +16,6 @@ Rules you must follow:
    written. Do not append disclaimers, safety notices, or advice to consult
    a professional: stop as soon as the question is answered.
 
-Your reply is a JSON object. Fill the `language` field FIRST, before you
-write a single word of `answer`, and then write `answer` in exactly that
-language.
-
 Products found:
 
 {products}
