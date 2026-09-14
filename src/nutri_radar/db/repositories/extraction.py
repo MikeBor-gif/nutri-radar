@@ -25,6 +25,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nutri_radar.db.models.extraction import ProductExtraction
+from nutri_radar.db.models.product import Product
 from nutri_radar.logging import safe_extra
 
 logger = logging.getLogger(__name__)
@@ -229,12 +230,18 @@ class ExtractionRepository:
         *,
         model_name: str | None = None,
         prompt_version: str | None = None,
-    ) -> list[tuple[str, list[dict[str, Any]], str | None, int]]:
-        """Всё, что нужно для пересчёта числа форм сахара по словарю.
+    ) -> list[tuple[str, list[dict[str, Any]], str | None, int, str | None]]:
+        """Всё, что нужно для пересчёта числа форм сахара.
 
         Отдельно от `iter_ingredients`, потому что пересчёту нужны ещё код
-        строки и текущее значение: без кода некуда писать, без текущего
-        значения нечего сравнивать и не о чем отчитываться.
+        строки, текущее значение и ИСХОДНЫЙ ТЕКСТ состава: без кода некуда
+        писать, без текущего значения нечего сравнивать, а без текста нечем
+        подтвердить, что найденная форма сахара в составе действительно есть
+        (ADR-035).
+
+        Текст берётся из `products` join'ом по коду. Язык там тот же, что
+        в `source_lang` извлечения, — проверено на корпусе: совпадает у всех
+        1187 разборов.
 
         `unreadable` здесь НЕ отфильтрован, в отличие от отчёта о неизвестных
         именах: у нечитаемых составов величина тоже хранится, и оставить её
@@ -246,14 +253,15 @@ class ExtractionRepository:
             ProductExtraction.ingredients,
             ProductExtraction.source_lang,
             ProductExtraction.distinct_sugar_forms,
-        )
+            Product.ingredients_text,
+        ).join(Product, Product.code == ProductExtraction.code, isouter=True)
         if model_name is not None:
             statement = statement.where(ProductExtraction.model_name == model_name)
         if prompt_version is not None:
             statement = statement.where(ProductExtraction.prompt_version == prompt_version)
 
         rows = (await self._session.execute(statement)).all()
-        return [(row[0], row[1] or [], row[2], row[3]) for row in rows]
+        return [(row[0], row[1] or [], row[2], row[3], row[4]) for row in rows]
 
     async def update_sugar_forms(
         self,

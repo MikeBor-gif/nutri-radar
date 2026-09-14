@@ -90,6 +90,7 @@ class AliasIndex:
     def __init__(self, entries: Iterable[AliasEntry] = ()) -> None:
         self._by_lang: dict[tuple[str, str], AliasEntry] = {}
         self._by_alias: dict[str, AliasEntry] = {}
+        self._aliases_of: dict[str, set[str]] = {}
         self._conflicts: list[tuple[str, str, str]] = []
         for entry in entries:
             self.add(entry)
@@ -100,6 +101,7 @@ class AliasIndex:
             return
 
         self._by_lang[(entry.lang, key)] = entry
+        self._aliases_of.setdefault(entry.canonical_name, set()).add(key)
         existing = self._by_alias.get(key)
         if existing is not None and existing.canonical_name != entry.canonical_name:
             # Один алиас ведёт к двум каноническим именам. Это ошибка словаря,
@@ -118,6 +120,14 @@ class AliasIndex:
             if entry is not None:
                 return entry
         return self._by_alias.get(key)
+
+    def aliases_of(self, canonical_name: str) -> set[str]:
+        """Все написания канонического имени, приведённые к ключу поиска.
+
+        Нужно сверке с исходным текстом: чтобы спросить «а есть ли эта форма
+        сахара в составе», надо знать, как её могли написать на пяти языках.
+        """
+        return set(self._aliases_of.get(canonical_name, ()))
 
     @property
     def size(self) -> int:
@@ -410,6 +420,130 @@ def sugar_forms_by_dictionary(
         if entry is not None and entry.kind is IngredientKind.SUGAR:
             found.add(entry.canonical_name)
     return found
+
+
+# Чем вычёркивается уже найденное. Цифра, а не управляющий символ: классы
+# `[^\W\d_]` в шаблонах алиасов пропускают только буквы, поэтому цифровая
+# заливка не может стать частью нового совпадения и не склеивает соседей.
+_CONSUMED = "0"
+
+
+def _alias_pattern(alias: str) -> re.Pattern[str]:
+    """Алиас как слово, которому разрешён грамматический хвост.
+
+    Русское «сахара» и польское `cukru` — те же слова, что «сахар» и `cukier`
+    в словаре, и требовать точного совпадения значило бы терять опору на двух
+    языках из пяти. Совпадение ищется с НАЧАЛА слова, хвост разрешён: `сахар`
+    находит «сахара», но не находит «несахар».
+    """
+    return re.compile(rf"(?<![^\W\d_])\s*{re.escape(alias)}[^\W\d_]*", re.IGNORECASE)
+
+
+def mentions_alias(text_key: str, aliases: Iterable[str]) -> bool:
+    """Встречается ли хоть одно написание в приведённом тексте состава.
+
+    Проверка одиночная и потому грубая: `glucose` найдётся и внутри
+    `glucose fructose syrup`. Разделять такие случаи — дело
+    `sugar_forms_grounded`, где длинные формы разбираются первыми.
+    """
+    return any(alias and _alias_pattern(alias).search(text_key) for alias in aliases)
+
+
+def _tokens_present(text_key: str, alias: str) -> bool:
+    """Все слова составного имени есть в тексте, порядок неважен.
+
+    Второй проход сверки. Первый ищет имя как есть и промахивается
+    на обратном порядке слов: в словаре `глюкозно-фруктозный сироп`,
+    а на пачке печенья написано «сироп глюкозно-фруктозный». На живых данных
+    из-за этого терялась настоящая форма сахара.
+
+    Соседство слов не проверяется: в списке через запятую слова одной формы
+    и так стоят рядом, а требование соседства вернуло бы ту же промашку
+    с другой стороны.
+    """
+    parts = [part for part in alias.split(" ") if part]
+    if len(parts) < 2:
+        return False
+    return all(_alias_pattern(part).search(text_key) for part in parts)
+
+
+def sugar_forms_grounded(
+    ingredients: Iterable[Ingredient],
+    index: AliasIndex,
+    *,
+    source_text: str,
+    lang: str | None = None,
+) -> set[str]:
+    """Формы сахара, подтверждённые словарём И исходным текстом состава.
+
+    Две независимые проверки вместо доверия модели: словарь отвечает
+    на вопрос «это вообще сахар», текст — на вопрос «а он тут есть».
+
+    Вторая проверка появилась по измерению, а не из осторожности: 38,1% форм,
+    подтверждённых словарём, в исходном составе отсутствовали. Модель
+    дописывает правдоподобное — йогурту с надписью «ZERO SUGAR» достались мёд
+    и патока, а составу из одних овсяных хлопьев — глюкозный сироп. Приём тот
+    же, которым в RAG отсекаются выдуманные штрихкоды: опору проверяет код,
+    а не промпт. Разбор — ADR-035.
+
+    Длинные формы разбираются первыми, найденное вычёркивается: иначе
+    `glucose` получал бы опору от соседнего `glucose-fructose syrup` — после
+    канонизации дефис становится пробелом, и короткое имя оказывается
+    отдельным словом внутри длинного.
+
+    **Чего проверка не умеет:**
+
+    * *Отрицание.* «Без сахара» содержит слово «сахар». То же ограничение
+      измерено у поиска на запросах «без пальмового масла» (ADR-029).
+    * *Далеко стоящие слова.* Второй проход требует все слова имени, но
+      не проверяет соседства: «сахарный сироп» получит опору от «сахар»
+      и «сироп» из разных концов состава.
+    """
+    text_key = normalize_key(source_text)
+    if not text_key:
+        return set()
+
+    candidates: dict[str, set[str]] = {}
+    for ingredient in ingredients:
+        entry = index.lookup(ingredient.canonical_name, lang=lang)
+        if entry is not None and entry.kind is IngredientKind.SUGAR:
+            candidates[entry.canonical_name] = index.aliases_of(entry.canonical_name)
+
+    order = sorted(
+        candidates, key=lambda name: max(map(len, candidates[name] or {""})), reverse=True
+    )
+
+    remaining = text_key
+    found: set[str] = set()
+    for canonical in order:
+        for alias in sorted(candidates[canonical], key=len, reverse=True):
+            if not alias:
+                continue
+            match = _alias_pattern(alias).search(remaining)
+            if match is None:
+                if _tokens_present(remaining, alias):
+                    found.add(canonical)
+                    break
+                continue
+            found.add(canonical)
+            remaining = (
+                remaining[: match.start()]
+                + _CONSUMED * (match.end() - match.start())
+                + remaining[match.end() :]
+            )
+            break
+    return found
+
+
+def distinct_sugar_forms_grounded(
+    ingredients: Iterable[Ingredient],
+    index: AliasIndex,
+    *,
+    source_text: str,
+    lang: str | None = None,
+) -> int:
+    """Сколько форм сахара подтверждают и словарь, и текст состава."""
+    return len(sugar_forms_grounded(ingredients, index, source_text=source_text, lang=lang))
 
 
 def distinct_sugar_forms_by_dictionary(

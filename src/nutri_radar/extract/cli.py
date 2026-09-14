@@ -32,7 +32,7 @@ from nutri_radar.extract.corpus import (
 )
 from nutri_radar.extract.normalize import (
     NormalizationStats,
-    distinct_sugar_forms_by_dictionary,
+    distinct_sugar_forms_grounded,
     format_unknown_report,
     load_db_index,
     normalize_ingredients,
@@ -201,13 +201,16 @@ def dict_recount(
         False, "--dry-run", help="Только показать, что изменилось бы, и ничего не писать."
     ),
 ) -> None:
-    """Пересчитать число форм сахара по словарю, не вызывая модель заново.
+    """Пересчитать число форм сахара, не вызывая модель заново.
 
-    Хранимое `distinct_sugar_forms` изначально считалось по типу, который
-    проставила модель. На живых данных оказалось, что 3B-модель называет
-    сахаром овёс, соль и молоко, и ключевая величина проекта завышена
-    (ADR-035). Эта команда пересчитывает её по словарю, читая уже сохранённые
-    разборы: повторный прогон LLM не нужен.
+    Форма засчитывается, только если её подтверждают ДВЕ независимые
+    проверки: словарь («это вообще сахар») и исходный текст состава
+    («он тут есть»). Хранимое значение изначально считалось по типу
+    от модели, и обе проверки его опровергают — 3B-модель называет сахаром
+    овёс, соль и молоко, а ещё дописывает мёд и патоку в составы, где их нет
+    (ADR-035).
+
+    Читаются уже сохранённые разборы, повторный прогон LLM не нужен.
     """
     settings = get_settings()
 
@@ -222,9 +225,11 @@ def dict_recount(
             было = 0
             стало = 0
             updates: dict[str, int] = {}
-            for code, ingredients, lang, current in rows:
+            for code, ingredients, lang, current, source_text in rows:
                 parsed = [Ingredient.model_validate(item) for item in ingredients]
-                forms = distinct_sugar_forms_by_dictionary(parsed, index, lang=lang)
+                forms = distinct_sugar_forms_grounded(
+                    parsed, index, source_text=source_text or "", lang=lang
+                )
                 было += current
                 стало += forms
                 if forms != current:

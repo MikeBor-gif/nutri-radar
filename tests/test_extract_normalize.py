@@ -25,11 +25,14 @@ from nutri_radar.extract.normalize import (
     NormalizationStats,
     distinct_sugar_forms,
     distinct_sugar_forms_by_dictionary,
+    distinct_sugar_forms_grounded,
     format_unknown_report,
     load_seed_index,
+    mentions_alias,
     normalize_ingredients,
     normalize_key,
     sugar_forms_by_dictionary,
+    sugar_forms_grounded,
 )
 from nutri_radar.extract.schemas import Ingredient, IngredientKind
 
@@ -342,3 +345,159 @@ class TestНастоящийСловарьЗакрываетНайденныеД
         ингредиент = _ingredient(имя, IngredientKind.SUGAR)
 
         assert distinct_sugar_forms_by_dictionary([ингредиент], настоящий) == 0
+
+
+class TestСверкаСТекстомСостава:
+    """Вторая проверка из ADR-035: форма обязана встречаться в составе.
+
+    Словарь отвечает «это сахар», текст — «он тут есть». Измерено, что без
+    второй проверки 38,1% посчитанных форм не имеют опоры в исходном тексте:
+    модель дописывает правдоподобное.
+    """
+
+    СОСТАВ = "Мука пшеничная, сахар, масло растительное, глюкозно-фруктозный сироп"
+
+    def test_форма_из_текста_засчитывается(self, index: AliasIndex):
+        формы = sugar_forms_grounded(
+            [_ingredient("сахар")], index, source_text=self.СОСТАВ, lang="ru"
+        )
+
+        assert формы == {"sugar"}
+
+    def test_выдуманная_форма_не_засчитывается(self, index: AliasIndex):
+        """Ровно случай йогурта «ZERO SUGAR», которому достались мёд и патока."""
+        формы = sugar_forms_grounded(
+            [_ingredient("glucose-fructose syrup")],
+            index,
+            source_text="Молоко цельное, закваска",
+            lang="ru",
+        )
+
+        assert формы == set()
+
+    def test_опора_ищется_по_любому_языку_словаря(self, index: AliasIndex):
+        """Модель отвечает по-английски даже на русский состав — это норма."""
+        формы = sugar_forms_grounded(
+            [_ingredient("glucose-fructose syrup")], index, source_text=self.СОСТАВ, lang="ru"
+        )
+
+        assert формы == {"glucose-fructose syrup"}
+
+    def test_пустой_текст_состава_не_даёт_опоры_никому(self, index: AliasIndex):
+        assert distinct_sugar_forms_grounded([_ingredient("сахар")], index, source_text="") == 0
+
+    def test_сверка_строже_словаря_на_тех_же_данных(self, index: AliasIndex):
+        ингредиенты = [_ingredient("сахар"), _ingredient("глюкозно-фруктозный сироп")]
+        текст = "Мука пшеничная, сахар, соль"
+
+        по_словарю = distinct_sugar_forms_by_dictionary(ингредиенты, index, lang="ru")
+        со_сверкой = distinct_sugar_forms_grounded(ингредиенты, index, source_text=текст, lang="ru")
+
+        assert по_словарю == 2
+        assert со_сверкой == 1
+
+    def test_отрицание_проверка_не_различает(self, index: AliasIndex):
+        """Честная фиксация границы: «без сахара» содержит слово «сахар».
+
+        То же ограничение измерено у поиска на запросах «без пальмового
+        масла» (ADR-029). Тест закрепляет известное поведение, а не желаемое:
+        если оно изменится, это должно быть решением, а не случайностью.
+        """
+        формы = sugar_forms_grounded(
+            [_ingredient("сахар")], index, source_text="Напиток без сахара", lang="ru"
+        )
+
+        assert формы == {"sugar"}
+
+
+class TestГраницыСлов:
+    def test_совпадение_идёт_с_начала_слова(self):
+        """`сахар` находит `сахара`, но не находит `несахар`."""
+        assert mentions_alias("мука сахара соль", ["сахар"]) is True
+        assert mentions_alias("подсахар", ["сахар"]) is False
+
+    def test_одиночная_проверка_не_разделяет_вложенные_имена(self):
+        """`glucose` найдётся внутри `glucose fructose syrup` — и это ожидаемо.
+
+        Разделение таких случаев делает `sugar_forms_grounded`, разбирая
+        длинные формы первыми; у одиночной проверки такой задачи нет.
+        """
+        assert mentions_alias("glucose fructose syrup", ["glucose"]) is True
+
+    def test_отдельное_слово_находится(self):
+        assert mentions_alias("sugar salt water", ["sugar"]) is True
+
+    def test_составной_алиас_находится(self):
+        assert mentions_alias("wheat flour glucose syrup salt", ["glucose syrup"]) is True
+
+    def test_пустой_алиас_не_даёт_ложной_опоры(self):
+        assert mentions_alias("sugar", [""]) is False
+
+
+class TestВложенныеИменаРазделяются:
+    """Длинные формы разбираются первыми и вычёркивают найденное."""
+
+    @pytest.fixture
+    def индекс(self) -> AliasIndex:
+        return AliasIndex(
+            [
+                AliasEntry("glucose", ANY_LANG, "glucose", IngredientKind.SUGAR),
+                AliasEntry(
+                    "glucose-fructose syrup",
+                    ANY_LANG,
+                    "glucose-fructose syrup",
+                    IngredientKind.SUGAR,
+                ),
+            ]
+        )
+
+    def test_длинная_форма_забирает_своё_вхождение(self, индекс: AliasIndex):
+        """В составе одна форма, а модель назвала две — засчитается длинная."""
+        формы = sugar_forms_grounded(
+            [_ingredient("glucose"), _ingredient("glucose-fructose syrup")],
+            индекс,
+            # Текст по-английски намеренно: у этого индекса русских алиасов нет,
+            # а проверяется здесь разбор вложенных имён, а не многоязычность.
+            source_text="Water, glucose-fructose syrup",
+        )
+
+        assert формы == {"glucose-fructose syrup"}
+
+    def test_обе_формы_засчитываются_когда_обе_в_составе(self, индекс: AliasIndex):
+        формы = sugar_forms_grounded(
+            [_ingredient("glucose"), _ingredient("glucose-fructose syrup")],
+            индекс,
+            source_text="Glucose-fructose syrup, water, glucose",
+        )
+
+        assert формы == {"glucose", "glucose-fructose syrup"}
+
+
+class TestОбратныйПорядокСлов:
+    """Второй проход сверки — реальная потеря на живых данных.
+
+    У печенья Oreo в составе «сироп глюкозно-фруктозный», а в словаре
+    «глюкозно-фруктозный сироп». До второго прохода настоящая форма сахара
+    не засчитывалась.
+    """
+
+    def test_обратный_порядок_слов_находится(self, index: AliasIndex):
+        формы = sugar_forms_grounded(
+            [_ingredient("glucose-fructose syrup")],
+            index,
+            source_text="Мука пшеничная, сахар, сироп глюкозно-фруктозный",
+            lang="ru",
+        )
+
+        assert формы == {"glucose-fructose syrup"}
+
+    def test_одного_слова_из_двух_не_хватает(self, index: AliasIndex):
+        """Требуются ВСЕ слова имени, иначе опора засчиталась бы от «сиропа»."""
+        формы = sugar_forms_grounded(
+            [_ingredient("glucose-fructose syrup")],
+            index,
+            source_text="Вода, сироп из топинамбура",
+            lang="ru",
+        )
+
+        assert формы == set()

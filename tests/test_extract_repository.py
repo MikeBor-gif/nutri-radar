@@ -204,7 +204,7 @@ class TestПересчётСахараПоСловарю:
         async with get_session(extract_settings.db) as session:
             repository = ExtractionRepository(session)
             строки = await repository.iter_for_sugar_recount()
-            текущие = {code: current for code, _, _, current in строки}
+            текущие = {code: current for code, _, _, current, _ in строки}
             assert текущие == {первый: 30, второй: 2}
 
             # Пересчитали только первый — второй трогать незачем.
@@ -229,7 +229,7 @@ class TestПересчётСахараПоСловарю:
         async with get_session(extract_settings.db) as session:
             assert await ExtractionRepository(session).update_sugar_forms({}) == 0
 
-    async def test_разбор_отдаётся_вместе_с_языком_и_составом(
+    async def test_разбор_отдаётся_вместе_с_составом_и_исходным_текстом(
         self, migrated_database, extract_settings: Settings, _clean_engine
     ):
         items = _items(1)
@@ -244,9 +244,11 @@ class TestПересчётСахараПоСловарю:
 
         assert len(строки) == 1
         # Кириллица не подходит под шаблон фиктивных имён ruff — берём `_`.
-        полученный_код, состав, _, _ = строки[0]
+        полученный_код, состав, _, _, текст = строки[0]
         assert полученный_код == code
         assert {i["canonical_name"] for i in состав} >= {"sugar", "glucose syrup"}
+        # Текст состава нужен сверке из ADR-035 — без него подтверждать нечем.
+        assert текст is not None
 
 
 class TestВозобновляемостьПрогона:
