@@ -70,6 +70,11 @@ class ModelRuntime:
         self._current: str | None = None
         self._active = 0
         self._unloaders: dict[str, Unloader] = {}
+        # Счётчики переключений. Нужны не для диагностики, а для замера:
+        # цена смены модели на 6 ГБ VRAM — это число, которое идёт в README
+        # как ограничение железа, и посчитать его можно только здесь.
+        self._loads = 0
+        self._switches = 0
         logger.debug(
             "Очередь к моделям создана",
             extra=safe_extra(
@@ -87,6 +92,22 @@ class ModelRuntime:
     def active_calls(self) -> int:
         """Сколько обращений выполняется прямо сейчас."""
         return self._active
+
+    @property
+    def loads(self) -> int:
+        """Сколько раз очередь загружала модель, считая самую первую."""
+        return self._loads
+
+    @property
+    def switches(self) -> int:
+        """Сколько раз одна модель сменила другую.
+
+        Первая загрузка сюда не входит: платить за неё придётся в любом
+        случае, а замер спрашивает про **цену чередования**. Смешать их
+        значило бы завысить цену ровно на одну загрузку — и тем сильнее,
+        чем короче прогон.
+        """
+        return self._switches
 
     @asynccontextmanager
     async def hold(self, model: str, *, unload: Unloader | None = None) -> AsyncIterator[None]:
@@ -147,10 +168,17 @@ class ModelRuntime:
         previous = self._current
         if previous is not None:
             await self._unload(previous)
+            self._switches += 1
+        self._loads += 1
         self._current = model
         logger.info(
             "Активная модель переключена",
-            extra=safe_extra(model=model, previous=previous or "—"),
+            extra=safe_extra(
+                model=model,
+                previous=previous or "—",
+                switches=self._switches,
+                loads=self._loads,
+            ),
         )
 
     async def _unload(self, model: str) -> None:

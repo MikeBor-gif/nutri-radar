@@ -503,8 +503,19 @@ class RetrievalSettings(BaseSettings):
     # в промахи — иначе метрика меряла бы длину ответа.
     language_min_letters: int = 20
 
+    # Сколько вопросов идёт в замер цены переключения моделей. Три:
+    # замер сравнивает два режима на одних и тех же вопросах, и каждый
+    # вопрос в режиме с чередованием стоит двух загрузок весов. Больше —
+    # это минуты ожидания ради второго знака после запятой.
+    switch_benchmark_size: int = 3
+
     @field_validator(
-        "embed_batch_size", "db_batch_size", "benchmark_size", "top_k", "language_min_letters"
+        "embed_batch_size",
+        "db_batch_size",
+        "benchmark_size",
+        "top_k",
+        "language_min_letters",
+        "switch_benchmark_size",
     )
     @classmethod
     def _validate_positive_retrieval(cls, value: int) -> int:

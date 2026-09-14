@@ -10,6 +10,7 @@ import asyncio
 import logging
 import sys
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 
 import httpx
 import typer
@@ -46,6 +47,7 @@ from nutri_radar.retrieval.pipeline import embed_texts, search_by_text
 from nutri_radar.retrieval.rag import answer as rag_answer
 from nutri_radar.retrieval.search import SearchFilters
 from nutri_radar.retrieval.search import search as search_products
+from nutri_radar.retrieval.switching import measure as measure_switching
 
 logger = logging.getLogger(__name__)
 
@@ -278,6 +280,12 @@ def evaluate(
         "--ood-limit",
         help="Сколько вопросов вне домена прогнать; 0 — все. Для замера перед полным прогоном.",
     ),
+    report: str = typer.Option(
+        "",
+        "--report",
+        help="Куда писать отчёт. Пусто — путь по умолчанию. Нужно, чтобы прогон "
+        "другой версии промпта не затёр числа предыдущей.",
+    ),
 ) -> None:
     """Посчитать метрики поиска и RAG на эталонных запросах.
 
@@ -311,7 +319,9 @@ def evaluate(
     )
 
     async def run() -> None:
-        report = RetrievalReport(k=top_k, prompt_version=settings.retrieval.rag_prompt_version)
+        metrics_report = RetrievalReport(
+            k=top_k, prompt_version=settings.retrieval.rag_prompt_version
+        )
         async with httpx.AsyncClient(base_url=settings.ollama.base_url) as client:
             # Оба набора векторизуются одним заходом: модель эмбеддингов
             # грузится в VRAM один раз, а не дважды с выгрузкой между.
@@ -332,9 +342,9 @@ def evaluate(
                     # Свойство проверяется тем же условием, которым эталон
                     # и определялся: один запрос в базу на выдачу.
                     matching = await matching_codes(gold.predicate, result.codes, settings)
-                    report.properties.append(score_property(gold, result, matching))
+                    metrics_report.properties.append(score_property(gold, result, matching))
                 if gold.expected:
-                    report.recalls.append(score_recall(gold, result))
+                    metrics_report.recalls.append(score_recall(gold, result))
                 results.append((gold, result))
 
             ood_results = []
@@ -352,8 +362,8 @@ def evaluate(
                 async with get_runtime(settings).hold(llm.model_name):
                     for index, (gold, result) in enumerate(results, start=1):
                         answer = await rag_answer(gold.query, result, llm, settings)
-                        report.groundings.append(score_grounding(answer))
-                        report.languages.append(
+                        metrics_report.groundings.append(score_grounding(answer))
+                        metrics_report.languages.append(
                             score_language(gold, answer, min_letters=min_letters)
                         )
                         logger.info(
@@ -362,25 +372,61 @@ def evaluate(
                         )
                     for index, (outsider, result) in enumerate(ood_results, start=1):
                         answer = await rag_answer(outsider.question, result, llm, settings)
-                        report.out_of_domain.append(score_out_of_domain(outsider, answer))
+                        metrics_report.out_of_domain.append(score_out_of_domain(outsider, answer))
                         logger.info(
                             "Вопрос вне домена обработан",
                             extra=safe_extra(done=index, total=len(ood_results)),
                         )
 
-        text = format_report(report)
-        path = write_report(text)
+        text = format_report(metrics_report)
+        path = write_report(text, Path(report) if report else None)
         typer.echo(_printable(text))
         logger.info(
             "Замер метрик поиска завершён",
             extra=safe_extra(
-                prompt_version=report.prompt_version,
-                language_match_share=round(report.language_match_share, 3),
-                language_undetermined=report.language_undetermined,
-                out_of_domain_refusal_share=round(report.out_of_domain_refusal_share, 3),
+                prompt_version=metrics_report.prompt_version,
+                language_match_share=round(metrics_report.language_match_share, 3),
+                language_undetermined=metrics_report.language_undetermined,
+                out_of_domain_refusal_share=round(metrics_report.out_of_domain_refusal_share, 3),
                 report=str(path),
             ),
         )
         typer.echo(f"\nОтчёт записан -> {path}")
+
+    _run(run)
+
+
+@app.command("switch-benchmark")
+def switch_benchmark(
+    questions: int = typer.Option(
+        0, "--questions", help="Сколько вопросов взять из эталона; 0 — из настроек."
+    ),
+    report: str = typer.Option(
+        "reports/m7_model_switching.md", "--report", help="Куда записать отчёт."
+    ),
+) -> None:
+    """Замерить, во что обходится смена модели на 6 ГБ VRAM.
+
+    Одни и те же вопросы прогоняются дважды: подряд на одной модели
+    и с чередованием, требующим выгружать веса. Разница медиан — цена
+    загрузки весов.
+
+    **Замер, а не оптимизация.** Число не предлагается уменьшать: это
+    цена того, что модель генерации и модель эмбеддингов не помещаются
+    в видеопамять одновременно. Оно идёт в README как ограничение железа.
+    """
+    settings = get_settings()
+    size = questions or settings.retrieval.switch_benchmark_size
+    # Вопросы берутся из эталона, а не выдумываются здесь: замер должен
+    # идти на том же, на чём считаются метрики, иначе числа двух замеров
+    # не о том же самом.
+    asked = [item.query for item in read_queries()[:size]]
+
+    async def run() -> None:
+        async with httpx.AsyncClient(base_url=settings.ollama.base_url) as client:
+            benchmark = await measure_switching(asked, client=client, settings=settings)
+        text = benchmark.format()
+        typer.echo(_printable(text))
+        typer.echo(f"\nОтчёт записан -> {write_report(text, Path(report))}")
 
     _run(run)
