@@ -719,7 +719,7 @@ uv run nutri-radar retrieval switch-benchmark  # цена переключени
 | Документ | Описание |
 |---|---|
 | [PITCH.md](PITCH.md) | разбор проекта вслух: что доказано, что нет, ответы на трудные вопросы |
-| [LICENSE](LICENSE) | MIT на код; данные остаются под ODbL |
+| [LICENSE](LICENSE) · [NOTICE](NOTICE) | MIT на код; данные остаются под ODbL |
 | [CLAUDE.md](CLAUDE.md) | правила работы над проектом |
 | [DECISIONS.md](DECISIONS.md) | журнал архитектурных решений |
 | [.ai-factory/ROADMAP.md](.ai-factory/ROADMAP.md) | карта майлстоунов и что каждый доказывает |
@@ -737,7 +737,9 @@ uv run nutri-radar retrieval switch-benchmark  # цена переключени
 [ODbL v1.0](https://opendatacommons.org/licenses/odbl/1-0/), отдельные элементы
 базы — под [DbCL v1.0](https://opendatacommons.org/licenses/dbcl/1-0/).
 Две разные лицензии на две разные вещи: код мой, данные чужие и остаются
-под своей лицензией. Атрибуция — ниже.
+под своей лицензией. Разделены и по файлам: `LICENSE` — чистый текст MIT,
+чтобы GitHub определял лицензию кода правильно, `NOTICE` — оговорка про
+данные. Атрибуция — ниже.
 
 ## Источник данных и атрибуция
 
