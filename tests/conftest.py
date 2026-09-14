@@ -41,12 +41,30 @@ _SECRET_KEYS = (
     "BOT__TOKEN",
     "ANTHROPIC__API_KEY",
     "LANGFUSE__SECRET_KEY",
-    "DB__PASSWORD",
 )
+
+# Пароль к базе стоит особняком: юнит-тестам он не нужен и затирается вместе
+# с остальными, а интеграционным нужен по устройству — без верного пароля
+# до контейнера не дойти, и фикстура `migrated_database` падает с
+# `InvalidPasswordError`. Именно так и случилось: ключ добавили в общий
+# список, CI позеленел на юнит-тестах и покраснел на интеграционных.
+_DB_PASSWORD_KEY = "DB__PASSWORD"
+
+
+def keys_to_blank(*, is_integration: bool) -> tuple[str, ...]:
+    """Какие переменные окружения затирать для теста.
+
+    Вынесено из фикстуры отдельной функцией, чтобы правило проверялось
+    тестом без поднятой базы: сама фикстура автоюзная, и «что она сделала»
+    изнутри обычного теста не видно.
+    """
+    if is_integration:
+        return _SECRET_KEYS
+    return (*_SECRET_KEYS, _DB_PASSWORD_KEY)
 
 
 @pytest.fixture(autouse=True)
-def _no_real_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
+def _no_real_secrets(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
     """Ни один тест не должен видеть настоящий секрет разработчика.
 
     Не паранойя, а разбор случившегося. Тест `test_secret_values` строил
@@ -58,8 +76,14 @@ def _no_real_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
     Причина общая: любая группа настроек, не заданная в тесте явно,
     берётся с машины, на которой тест запущен. Фикстура закрывает это
     для всех тестов сразу, а не только для того, который уже обжёгся.
+
+    Исключение одно — `DB__PASSWORD` у тестов с маркером `integration`:
+    см. комментарий у `_DB_PASSWORD_KEY`. Токен бота, ключ Anthropic
+    и ключ Langfuse затираются и у них тоже: настоящие секреты
+    интеграционным тестам не нужны.
     """
-    for key in _SECRET_KEYS:
+    is_integration = request.node.get_closest_marker("integration") is not None
+    for key in keys_to_blank(is_integration=is_integration):
         monkeypatch.setenv(key, "")
 
 
@@ -187,6 +211,13 @@ def integration_settings() -> Settings:
     не дойти. Подменяется только имя базы — на него навешена защита по суффиксу.
     """
     from nutri_radar.config import get_settings
+
+    # Кэш сбрасываем намеренно. `get_settings` кэширован на процесс, и в общем
+    # прогоне (`pytest -m ""`) настройки мог собрать любой юнит-тест — с уже
+    # затёртым `DB__PASSWORD`. Тогда интеграционные получили бы пустой пароль
+    # не из своего окружения, а из чужого кэша, и падение зависело бы
+    # от порядка тестов.
+    get_settings.cache_clear()
 
     real = get_settings()
     return real.model_copy(
