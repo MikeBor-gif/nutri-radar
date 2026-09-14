@@ -381,6 +381,47 @@ def distinct_sugar_forms(ingredients: Iterable[NormalizedIngredient]) -> int:
     return len({item.name for item in ingredients if item.kind is IngredientKind.SUGAR})
 
 
+def sugar_forms_by_dictionary(
+    ingredients: Iterable[Ingredient],
+    index: AliasIndex,
+    *,
+    lang: str | None = None,
+) -> set[str]:
+    """Канонические формы сахара, подтверждённые СЛОВАРЁМ.
+
+    Отличие от `distinct_sugar_forms` принципиальное: там тип берётся
+    у ингредиента (а значит, в конечном счёте у модели, если словарь имя
+    не знает), здесь — только у словаря. Имени нет в словаре — это не форма
+    сахара, как бы её ни назвала модель.
+
+    Так сделано не из вкуса, а по измерению: на живых данных
+    `qwen2.5:3b-instruct-q4_K_M` проставляла `kind=sugar` овсу, соли, молоку
+    и списку аллергенов подряд, и ключевая величина проекта оказалась
+    завышенной. Словарь детерминирован и проверяем глазами, вердикт модели —
+    нет. Разбор — ADR-035.
+
+    Цена решения названа прямо: форма сахара, которой нет в словаре,
+    не посчитается. Куда словарь пополнять, показывает отчёт
+    `extract dict unknown` — по данным, а не на глаз.
+    """
+    found: set[str] = set()
+    for ingredient in ingredients:
+        entry = index.lookup(ingredient.canonical_name, lang=lang)
+        if entry is not None and entry.kind is IngredientKind.SUGAR:
+            found.add(entry.canonical_name)
+    return found
+
+
+def distinct_sugar_forms_by_dictionary(
+    ingredients: Iterable[Ingredient],
+    index: AliasIndex,
+    *,
+    lang: str | None = None,
+) -> int:
+    """Сколько РАЗНЫХ форм сахара подтверждает словарь."""
+    return len(sugar_forms_by_dictionary(ingredients, index, lang=lang))
+
+
 def format_unknown_report(stats: NormalizationStats, limit: int) -> str:
     """Человекочитаемый список того, куда пополнять словарь."""
     lines = [

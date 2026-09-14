@@ -32,6 +32,7 @@ from nutri_radar.extract.corpus import (
 )
 from nutri_radar.extract.normalize import (
     NormalizationStats,
+    distinct_sugar_forms_by_dictionary,
     format_unknown_report,
     load_db_index,
     normalize_ingredients,
@@ -190,6 +191,62 @@ def dict_sync() -> None:
     """
     affected = _run(lambda: sync_seed_to_db())
     typer.echo(f"Записано строк словаря: {affected}")
+
+
+@dict_app.command("recount")
+def dict_recount(
+    prompt: str = typer.Option("", "--prompt", "-p", help="Ограничить версией промпта."),
+    model: str = typer.Option("", "--model", help="Ограничить моделью."),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Только показать, что изменилось бы, и ничего не писать."
+    ),
+) -> None:
+    """Пересчитать число форм сахара по словарю, не вызывая модель заново.
+
+    Хранимое `distinct_sugar_forms` изначально считалось по типу, который
+    проставила модель. На живых данных оказалось, что 3B-модель называет
+    сахаром овёс, соль и молоко, и ключевая величина проекта завышена
+    (ADR-035). Эта команда пересчитывает её по словарю, читая уже сохранённые
+    разборы: повторный прогон LLM не нужен.
+    """
+    settings = get_settings()
+
+    async def _work() -> tuple[int, int, int, int]:
+        index = await load_db_index(settings)
+        async with get_session(settings.db) as session:
+            repository = ExtractionRepository(session)
+            rows = await repository.iter_for_sugar_recount(
+                model_name=model or None, prompt_version=prompt or None
+            )
+
+            было = 0
+            стало = 0
+            updates: dict[str, int] = {}
+            for code, ingredients, lang, current in rows:
+                parsed = [Ingredient.model_validate(item) for item in ingredients]
+                forms = distinct_sugar_forms_by_dictionary(parsed, index, lang=lang)
+                было += current
+                стало += forms
+                if forms != current:
+                    updates[code] = forms
+
+            written = 0
+            if updates and not dry_run:
+                written = await repository.update_sugar_forms(
+                    updates, model_name=model or None, prompt_version=prompt or None
+                )
+
+        return len(rows), было, стало, (len(updates) if dry_run else written)
+
+    total, было, стало, changed = _run(_work)
+    if not total:
+        typer.echo("Разборов не найдено — пересчитывать нечего.")
+        return
+
+    typer.echo(f"Разборов:            {total}")
+    typer.echo(f"Среднее было:        {было / total:.2f}")
+    typer.echo(f"Среднее стало:       {стало / total:.2f}")
+    typer.echo(f"Изменилось строк:    {changed}" + (" (ничего не записано)" if dry_run else ""))
 
 
 @dict_app.command("unknown")

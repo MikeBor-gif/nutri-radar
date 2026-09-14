@@ -24,10 +24,12 @@ from nutri_radar.extract.normalize import (
     AliasIndex,
     NormalizationStats,
     distinct_sugar_forms,
+    distinct_sugar_forms_by_dictionary,
     format_unknown_report,
     load_seed_index,
     normalize_ingredients,
     normalize_key,
+    sugar_forms_by_dictionary,
 )
 from nutri_radar.extract.schemas import Ingredient, IngredientKind
 
@@ -252,3 +254,91 @@ class TestСтатистикаНеизвестных:
 
         assert stats.unknown_share == 0.0
         assert stats.top_unknown(10) == []
+
+
+class TestСчётСахараПоСловарю:
+    """Регрессия на дефект из ADR-035.
+
+    Хранимое число форм сахара считалось по типу от модели, и на живых данных
+    `qwen2.5:3b` проставила `kind=sugar` овсу, соли, молоку и списку
+    аллергенов подряд — у одного продукта вышло «30 форм сахара», из которых
+    сахаром не была ни одна. Словарь этот вердикт больше не наследует.
+    """
+
+    def test_вердикт_модели_не_делает_ингредиент_сахаром(self, index: AliasIndex):
+        ингредиенты = [
+            _ingredient("oats", IngredientKind.SUGAR),
+            _ingredient("salt", IngredientKind.SUGAR),
+            _ingredient("milk", IngredientKind.SUGAR),
+        ]
+
+        assert distinct_sugar_forms_by_dictionary(ингредиенты, index) == 0
+
+    def test_словарь_подтверждает_настоящий_сахар(self, index: AliasIndex):
+        ингредиенты = [_ingredient("sugar"), _ingredient("oats", IngredientKind.SUGAR)]
+
+        assert sugar_forms_by_dictionary(ингредиенты, index) == {"sugar"}
+
+    def test_разные_написания_считаются_одной_формой(self, index: AliasIndex):
+        ингредиенты = [
+            _ingredient("глюкозно-фруктозный сироп"),
+            _ingredient("glucose-fructose syrup"),
+        ]
+
+        assert distinct_sugar_forms_by_dictionary(ингредиенты, index, lang="ru") == 1
+
+    def test_разные_формы_считаются_по_отдельности(self, index: AliasIndex):
+        ингредиенты = [_ingredient("сахар"), _ingredient("глюкозно-фруктозный сироп")]
+
+        assert distinct_sugar_forms_by_dictionary(ингредиенты, index, lang="ru") == 2
+
+    def test_подсластитель_не_считается_формой_сахара(self, index: AliasIndex):
+        """`sorbitol` в словаре помечен `sweetener`, и это не сахар."""
+        assert distinct_sugar_forms_by_dictionary([_ingredient("sorbitol")], index) == 0
+
+    def test_старый_счёт_на_тех_же_данных_даёт_завышенное_число(self, index: AliasIndex):
+        """Прямое сравнение двух способов — то самое расхождение из ADR-035."""
+        ингредиенты = [
+            _ingredient("oats", IngredientKind.SUGAR),
+            _ingredient("salt", IngredientKind.SUGAR),
+            _ingredient("sugar", IngredientKind.SUGAR),
+        ]
+
+        по_модели = distinct_sugar_forms(normalize_ingredients(ингредиенты, index))
+        по_словарю = distinct_sugar_forms_by_dictionary(ингредиенты, index)
+
+        assert по_модели == 3
+        assert по_словарю == 1
+
+    def test_пустой_состав_даёт_ноль(self, index: AliasIndex):
+        assert distinct_sugar_forms_by_dictionary([], index) == 0
+
+
+class TestНастоящийСловарьЗакрываетНайденныеДыры:
+    """Имена, которых словарю не хватило на живых данных (ADR-035)."""
+
+    @pytest.fixture
+    def настоящий(self) -> AliasIndex:
+        return load_seed_index()
+
+    @pytest.mark.parametrize(
+        ("имя", "язык"),
+        [
+            ("fructose syrup", "en"),
+            ("karamellzuckersirup", "de"),
+            ("rohrohrzucker", "de"),
+            ("organic cane sugar", "en"),
+            ("laktoza z mleka", "pl"),
+        ],
+    )
+    def test_форма_сахара_из_живых_данных_теперь_известна(
+        self, настоящий: AliasIndex, имя: str, язык: str
+    ):
+        assert distinct_sugar_forms_by_dictionary([_ingredient(имя)], настоящий, lang=язык) == 1
+
+    @pytest.mark.parametrize("имя", ["milk", "salt", "cocoa butter", "wheat flour", "gluten"])
+    def test_не_сахар_из_живых_данных_сахаром_не_становится(self, настоящий: AliasIndex, имя: str):
+        """Эти имена модель называла сахаром чаще всего."""
+        ингредиент = _ingredient(имя, IngredientKind.SUGAR)
+
+        assert distinct_sugar_forms_by_dictionary([ингредиент], настоящий) == 0

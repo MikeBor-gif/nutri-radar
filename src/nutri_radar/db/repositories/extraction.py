@@ -17,10 +17,10 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, cast
 
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import func, select
+from sqlalchemy import CursorResult, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -223,6 +223,72 @@ class ExtractionRepository:
 
         rows = (await self._session.execute(statement)).all()
         return [(row[0] or [], row[1]) for row in rows]
+
+    async def iter_for_sugar_recount(
+        self,
+        *,
+        model_name: str | None = None,
+        prompt_version: str | None = None,
+    ) -> list[tuple[str, list[dict[str, Any]], str | None, int]]:
+        """Всё, что нужно для пересчёта числа форм сахара по словарю.
+
+        Отдельно от `iter_ingredients`, потому что пересчёту нужны ещё код
+        строки и текущее значение: без кода некуда писать, без текущего
+        значения нечего сравнивать и не о чем отчитываться.
+
+        `unreadable` здесь НЕ отфильтрован, в отличие от отчёта о неизвестных
+        именах: у нечитаемых составов величина тоже хранится, и оставить её
+        пересчитанной наполовину значило бы держать в одной колонке числа,
+        посчитанные двумя разными способами.
+        """
+        statement = select(
+            ProductExtraction.code,
+            ProductExtraction.ingredients,
+            ProductExtraction.source_lang,
+            ProductExtraction.distinct_sugar_forms,
+        )
+        if model_name is not None:
+            statement = statement.where(ProductExtraction.model_name == model_name)
+        if prompt_version is not None:
+            statement = statement.where(ProductExtraction.prompt_version == prompt_version)
+
+        rows = (await self._session.execute(statement)).all()
+        return [(row[0], row[1] or [], row[2], row[3]) for row in rows]
+
+    async def update_sugar_forms(
+        self,
+        values: dict[str, int],
+        *,
+        model_name: str | None = None,
+        prompt_version: str | None = None,
+    ) -> int:
+        """Переписать `distinct_sugar_forms` у перечисленных кодов.
+
+        Одним запросом на код: строк тут тысячи, а не миллионы, и городить
+        ради них батч-апдейт через VALUES значило бы усложнить на ровном месте.
+        """
+        if not values:
+            return 0
+
+        affected = 0
+        for code, forms in values.items():
+            statement = (
+                update(ProductExtraction)
+                .where(ProductExtraction.code == code)
+                .values(distinct_sugar_forms=forms)
+            )
+            if model_name is not None:
+                statement = statement.where(ProductExtraction.model_name == model_name)
+            if prompt_version is not None:
+                statement = statement.where(ProductExtraction.prompt_version == prompt_version)
+            result = await self._session.execute(statement)
+            # rowcount живёт на CursorResult; типовой стаб execute() отдаёт
+            # Result, у которого его нет. Приведение честнее, чем ignore.
+            affected += cast("CursorResult[Any]", result).rowcount or 0
+
+        await self._session.commit()
+        logger.info("Число форм сахара пересчитано", extra=safe_extra(rows=affected))
+        return affected
 
     async def count(
         self,

@@ -181,6 +181,74 @@ class TestРепозиторийИзвлечений:
         assert done_other_model == set()
 
 
+class TestПересчётСахараПоСловарю:
+    """Запись пересчитанной величины — ADR-035.
+
+    Логика счёта проверена без базы в `test_extract_normalize.py`; здесь —
+    ровно то, что моком не проверишь: чтение сохранённых разборов вместе
+    с кодом и текущим значением и перезапись колонки на месте.
+    """
+
+    async def test_пересчёт_переписывает_только_изменившиеся(
+        self, migrated_database, extract_settings: Settings, _clean_engine
+    ):
+        items = _items(2)
+        await _seed_products(extract_settings, items)
+        первый, второй = items[0].code, items[1].code
+
+        async with get_session(extract_settings.db) as session:
+            await ExtractionRepository(session).upsert_batch(
+                [_row(первый, sugar_forms=30), _row(второй, sugar_forms=2)]
+            )
+
+        async with get_session(extract_settings.db) as session:
+            repository = ExtractionRepository(session)
+            строки = await repository.iter_for_sugar_recount()
+            текущие = {code: current for code, _, _, current in строки}
+            assert текущие == {первый: 30, второй: 2}
+
+            # Пересчитали только первый — второй трогать незачем.
+            written = await repository.update_sugar_forms({первый: 2})
+
+        assert written == 1
+
+        async with get_session(extract_settings.db) as session:
+            значения = dict(
+                (
+                    await session.execute(
+                        text("SELECT code, distinct_sugar_forms FROM product_extraction")
+                    )
+                ).all()
+            )
+
+        assert значения == {первый: 2, второй: 2}
+
+    async def test_пустой_пересчёт_ничего_не_пишет(
+        self, migrated_database, extract_settings: Settings, _clean_engine
+    ):
+        async with get_session(extract_settings.db) as session:
+            assert await ExtractionRepository(session).update_sugar_forms({}) == 0
+
+    async def test_разбор_отдаётся_вместе_с_языком_и_составом(
+        self, migrated_database, extract_settings: Settings, _clean_engine
+    ):
+        items = _items(1)
+        await _seed_products(extract_settings, items)
+        code = items[0].code
+
+        async with get_session(extract_settings.db) as session:
+            await ExtractionRepository(session).upsert_batch([_row(code)])
+
+        async with get_session(extract_settings.db) as session:
+            строки = await ExtractionRepository(session).iter_for_sugar_recount()
+
+        assert len(строки) == 1
+        # Кириллица не подходит под шаблон фиктивных имён ruff — берём `_`.
+        полученный_код, состав, _, _ = строки[0]
+        assert полученный_код == code
+        assert {i["canonical_name"] for i in состав} >= {"sugar", "glucose syrup"}
+
+
 class TestВозобновляемостьПрогона:
     async def test_повторный_запуск_пропускает_обработанное(
         self, migrated_database, extract_settings: Settings, _clean_engine
