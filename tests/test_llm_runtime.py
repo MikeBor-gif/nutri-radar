@@ -193,3 +193,55 @@ class TestДиагностика:
         assert runtime.active_calls == 0
         async with runtime.hold("B"):
             pass
+
+
+class TestСчётчикПереключений:
+    """Счётчик нужен не для диагностики, а для замера цены смены модели.
+
+    Само поведение очереди — выгружать при смене и не выгружать при
+    повторе — уже проверено в `TestВыгрузка`. Здесь проверяется, что
+    число, которое пойдёт в README как цена 6 ГБ VRAM, посчитано верно.
+    """
+
+    async def test_первая_загрузка_не_переключение(self, runtime: ModelRuntime) -> None:
+        """Платить за неё придётся в любом случае.
+
+        Замер спрашивает про цену **чередования**; засчитать сюда первую
+        загрузку значило бы завысить её ровно на одну — и тем сильнее,
+        чем короче прогон.
+        """
+        async with runtime.hold("A"):
+            pass
+        assert runtime.switches == 0
+        assert runtime.loads == 1
+
+    async def test_повтор_той_же_модели_не_считается(self, runtime: ModelRuntime) -> None:
+        for _ in range(3):
+            async with runtime.hold("A"):
+                pass
+        assert runtime.switches == 0
+        assert runtime.loads == 1
+
+    async def test_чередование_считается_на_каждую_смену(self, runtime: ModelRuntime) -> None:
+        for model in ("A", "B", "A", "B"):
+            async with runtime.hold(model):
+                pass
+        assert runtime.switches == 3
+        assert runtime.loads == 4
+
+    async def test_счётчик_совпадает_с_числом_выгрузок(self, runtime: ModelRuntime) -> None:
+        """Переключение и выгрузка — одно событие, а не два похожих."""
+        unloaded: list[str] = []
+
+        def unloader(name: str):
+            async def unload() -> None:
+                unloaded.append(name)
+
+            return unload
+
+        for model in ("A", "B", "A"):
+            async with runtime.hold(model, unload=unloader(model)):
+                pass
+
+        assert runtime.switches == 2
+        assert unloaded == ["A", "B"]
