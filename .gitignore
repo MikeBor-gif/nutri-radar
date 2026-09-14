@@ -29,6 +29,7 @@
 !/data/retrieval/
 /data/retrieval/*
 !/data/retrieval/queries.jsonl
+!/data/retrieval/out_of_domain.jsonl
 !/data/agent/
 /data/agent/*
 !/data/agent/questions.jsonl

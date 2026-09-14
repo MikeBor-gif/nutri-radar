@@ -19,6 +19,7 @@ from nutri_radar.db.session import dispose_engine
 from nutri_radar.llm.adapters import OllamaEmbeddings
 from nutri_radar.llm.factory import build_llm
 from nutri_radar.llm.runtime import get_runtime
+from nutri_radar.logging import safe_extra
 from nutri_radar.retrieval.embed import (
     build_index,
     count_candidates,
@@ -31,8 +32,11 @@ from nutri_radar.retrieval.metrics import (
     append_query,
     format_report,
     matching_codes,
+    read_out_of_domain,
     read_queries,
     score_grounding,
+    score_language,
+    score_out_of_domain,
     score_property,
     score_recall,
     write_report,
@@ -264,21 +268,63 @@ def add_query(
 def evaluate(
     limit: int = typer.Option(0, "--limit", help="Сколько возвращать; 0 — из настроек."),
     with_rag: bool = typer.Option(True, "--rag/--no-rag", help="Считать и подтверждённость."),
+    with_out_of_domain: bool = typer.Option(
+        True,
+        "--out-of-domain/--no-out-of-domain",
+        help="Считать долю отказов на вопросах вне домена.",
+    ),
+    ood_limit: int = typer.Option(
+        0,
+        "--ood-limit",
+        help="Сколько вопросов вне домена прогнать; 0 — все. Для замера перед полным прогоном.",
+    ),
 ) -> None:
-    """Посчитать recall@k и подтверждённость на эталонных запросах."""
+    """Посчитать метрики поиска и RAG на эталонных запросах.
+
+    Считаются четыре величины: доля выдачи с запрошенным свойством,
+    подтверждённость ответа, доля ответов на языке вопроса и доля честных
+    отказов на вопросах вне домена. **Числа публикуются как есть**,
+    включая плохие: замер, подправленный под ожидание, ничего не измеряет.
+
+    Вопросы вне домена идут отдельным набором и отдельной метрикой: по ним
+    не считаются ни свойство выдачи, ни подтверждённость — верного ответа
+    у них нет, и мерить по ним качество поиска значило бы смешать два
+    разных измерения.
+    """
     settings = get_settings()
     queries = read_queries()
+    outsiders = read_out_of_domain() if (with_rag and with_out_of_domain) else []
+    if ood_limit:
+        outsiders = outsiders[:ood_limit]
     top_k = limit or settings.retrieval.top_k
+    min_letters = settings.retrieval.language_min_letters
+
+    logger.info(
+        "Замер метрик поиска начат",
+        extra=safe_extra(
+            gold=len(queries),
+            out_of_domain=len(outsiders),
+            top_k=top_k,
+            with_rag=with_rag,
+            prompt_version=settings.retrieval.rag_prompt_version,
+        ),
+    )
 
     async def run() -> None:
-        report = RetrievalReport(k=top_k)
+        report = RetrievalReport(k=top_k, prompt_version=settings.retrieval.rag_prompt_version)
         async with httpx.AsyncClient(base_url=settings.ollama.base_url) as client:
+            # Оба набора векторизуются одним заходом: модель эмбеддингов
+            # грузится в VRAM один раз, а не дважды с выгрузкой между.
             vectors = await embed_texts(
-                [item.query for item in queries], client=client, settings=settings
+                [item.query for item in queries] + [item.question for item in outsiders],
+                client=client,
+                settings=settings,
             )
+            gold_vectors = vectors[: len(queries)]
+            ood_vectors = vectors[len(queries) :]
 
             results = []
-            for gold, vector in zip(queries, vectors, strict=True):
+            for gold, vector in zip(queries, gold_vectors, strict=True):
                 result = await search_products(
                     vector, query=gold.query, limit=top_k, settings=settings
                 )
@@ -291,18 +337,50 @@ def evaluate(
                     report.recalls.append(score_recall(gold, result))
                 results.append((gold, result))
 
+            ood_results = []
+            for outsider, vector in zip(outsiders, ood_vectors, strict=True):
+                result = await search_products(
+                    vector, query=outsider.question, limit=top_k, settings=settings
+                )
+                ood_results.append((outsider, result))
+
             if with_rag:
                 llm = build_llm(settings, client)
                 # Одно удержание очереди на весь цикл: между вопросами
                 # модель не выгружается, иначе прогон по эталону превратился
                 # бы в двадцать перезагрузок весов.
                 async with get_runtime(settings).hold(llm.model_name):
-                    for gold, result in results:
+                    for index, (gold, result) in enumerate(results, start=1):
                         answer = await rag_answer(gold.query, result, llm, settings)
                         report.groundings.append(score_grounding(answer))
+                        report.languages.append(
+                            score_language(gold, answer, min_letters=min_letters)
+                        )
+                        logger.info(
+                            "Эталонный запрос обработан",
+                            extra=safe_extra(done=index, total=len(results)),
+                        )
+                    for index, (outsider, result) in enumerate(ood_results, start=1):
+                        answer = await rag_answer(outsider.question, result, llm, settings)
+                        report.out_of_domain.append(score_out_of_domain(outsider, answer))
+                        logger.info(
+                            "Вопрос вне домена обработан",
+                            extra=safe_extra(done=index, total=len(ood_results)),
+                        )
 
         text = format_report(report)
+        path = write_report(text)
         typer.echo(_printable(text))
-        typer.echo(f"\nОтчёт записан -> {write_report(text)}")
+        logger.info(
+            "Замер метрик поиска завершён",
+            extra=safe_extra(
+                prompt_version=report.prompt_version,
+                language_match_share=round(report.language_match_share, 3),
+                language_undetermined=report.language_undetermined,
+                out_of_domain_refusal_share=round(report.out_of_domain_refusal_share, 3),
+                report=str(path),
+            ),
+        )
+        typer.echo(f"\nОтчёт записан -> {path}")
 
     _run(run)
