@@ -17,6 +17,31 @@
 **Формулировки описательные.** Границы продукта из брифа: «в составе три
 разные формы сахара», а не «вредно». Правило записано в промпт и проверяется
 тестом на запрещённых словах.
+
+**Язык ответа принуждается схемой, а не просьбой — начиная с `rag_v2`.**
+Правило «отвечай на языке вопроса» в `rag_v1` было и раньше, пунктом 5.
+Замер показал, что модель на 3B нарушает его в 23,5% случаев, и все
+нарушения одного вида: русский вопрос, английский ответ. Поэтому в схему
+ответа добавлено поле `language`, которое модель обязана заполнить **до**
+`answer` — тот же приём, что вытащил извлечение на M2: схема как параметр
+генерации надёжнее просьбы в тексте.
+
+Принуждение асимметрично, и это не небрежность. Кириллица в вопросе
+определяет язык однозначно — ни один латинский язык её не использует,
+— и схема сужается до `enum: ["ru"]`. Вопрос на латинице может быть
+английским, немецким или французским, различить их алфавитом нельзя,
+и навязать ему «английский» значило бы сделать хуже, чем `rag_v1`:
+там модель хотя бы имела шанс ответить по-немецки. Для таких вопросов
+поле `language` **присутствует, но свободной строкой**: модель обязана
+назвать язык до ответа, а какой именно — решает сама.
+
+Первая версия этого кода поле для латиницы не добавляла вовсе, хотя
+промпт его требовал, а описание обещало «свободную строку». Промпт
+просил поле, которого схема не допускала, и принуждения для двух третей
+языков корпуса не было ни в каком виде. Чтобы такое не повторилось,
+текст правила и разрешённые значения поля возвращает **одна функция**
+(`language_rule`), а требование про JSON живёт внутри этого текста,
+а не отдельным абзацем промпта: разойтись им теперь негде.
 """
 
 from __future__ import annotations
@@ -24,11 +49,13 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
+from typing import Any
 
 from nutri_radar.config import Settings, get_settings
 from nutri_radar.errors import ExtractionError, LLMUnavailableError
 from nutri_radar.llm.ports import StructuredLLM
 from nutri_radar.logging import safe_extra
+from nutri_radar.retrieval.language import LANGUAGE_NAMES, is_cyrillic
 from nutri_radar.retrieval.prompts import load_prompt
 from nutri_radar.retrieval.search import SearchHit, SearchResult
 
@@ -101,6 +128,80 @@ def format_products(hits: list[SearchHit]) -> str:
     return "\n\n".join(blocks)
 
 
+def language_rule(question: str) -> tuple[str, list[str]]:
+    """Правило о языке для промпта и допустимые значения поля `language`.
+
+    Returns:
+        Пара «текст правила, список разрешённых языков». Пустой список
+        означает «язык вопроса неизвестен»: поле остаётся свободным.
+
+    Note:
+        Возвращается ровно то, что уходит в промпт и в схему, — одной
+        функцией, чтобы они не могли разойтись. Промпт, называющий
+        русский, и схема, разрешающая что угодно, дали бы принуждение
+        только на бумаге.
+    """
+    fill_first = (
+        "Fill the `language` field of your JSON reply FIRST, before you write "
+        "a single word of `answer`, and then write `answer` in that language."
+    )
+    if not is_cyrillic(question):
+        return (
+            "Answer in the same language as the question: if it is in German, "
+            "answer in German; if in French, answer in French; if in English, "
+            f"answer in English. {fill_first}",
+            [],
+        )
+    name = LANGUAGE_NAMES["ru"]
+    return (
+        f"The question is written in {name}. Your answer MUST be in {name}. {fill_first}",
+        ["ru"],
+    )
+
+
+def answer_schema(
+    allowed_languages: list[str] | None = None, *, require_language: bool = False
+) -> dict[str, Any]:
+    """JSON-схема ответа.
+
+    Args:
+        allowed_languages: чем ограничить поле `language`. Пустой список
+            или `None` — поле остаётся свободной строкой.
+        require_language: добавлять ли поле `language` вообще. Отдельный
+            флаг, а не «непустой список», потому что «поле есть, значения
+            любые» и «поля нет» — разные вещи, и различать их по пустоте
+            списка означало бы молча отключать принуждение там, где язык
+            вопроса просто не определился. Ровно так и вышло в первой
+            версии: для латиницы поля не было, хотя промпт его требовал.
+
+    Note:
+        Порядок ключей здесь значим. Модель заполняет поля в том порядке,
+        в котором они объявлены, и `language` перед `answer` заставляет
+        её назвать язык до того, как она напишет первое слово текста.
+        Поменять местами значило бы получить поле-отметку задним числом.
+    """
+    properties: dict[str, Any] = {}
+    required: list[str] = []
+    if require_language:
+        language: dict[str, Any] = {"type": "string"}
+        if allowed_languages:
+            language["enum"] = list(allowed_languages)
+        properties["language"] = language
+        required.append("language")
+    properties["answer"] = {"type": "string"}
+    # Модель обязана перечислить использованные штрихкоды отдельным
+    # полем, а не только в тексте. Расхождение между полем и текстом
+    # — сигнал, что ссылки в тексте выдуманы.
+    properties["sources"] = {"type": "array", "items": {"type": "string"}}
+    required += ["answer", "sources"]
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": required,
+        "additionalProperties": False,
+    }
+
+
 def relevant_hits(
     result: SearchResult, *, min_similarity: float = MIN_SIMILARITY
 ) -> list[SearchHit]:
@@ -136,6 +237,7 @@ async def answer(
             "RAG отказался: релевантного не нашлось",
             extra=safe_extra(
                 question=question[:120],
+                prompt_version=version,
                 found=len(result.hits),
                 min_similarity=min_similarity,
             ),
@@ -148,26 +250,30 @@ async def answer(
             model_name=llm.model_name,
         )
 
-    prompt = load_prompt(version).render(question=question, products=format_products(hits))
-    schema = {
-        "type": "object",
-        "properties": {
-            "answer": {"type": "string"},
-            # Модель обязана перечислить использованные штрихкоды отдельным
-            # полем, а не только в тексте. Расхождение между полем и текстом
-            # — сигнал, что ссылки в тексте выдуманы.
-            "sources": {"type": "array", "items": {"type": "string"}},
-        },
-        "required": ["answer", "sources"],
-        "additionalProperties": False,
-    }
+    template = load_prompt(version)
+    rule, allowed = language_rule(question) if template.forces_language else ("", [])
+    prompt = template.render(question=question, products=format_products(hits), language_rule=rule)
+    schema = answer_schema(allowed, require_language=template.forces_language)
+    if template.forces_language:
+        logger.debug(
+            "Язык ответа принуждается схемой",
+            extra=safe_extra(
+                prompt_version=version,
+                allowed=allowed or "любой",
+                question=question[:120],
+            ),
+        )
 
     try:
         response = await llm.generate(prompt, json_schema=schema)
     except (LLMUnavailableError, ExtractionError) as exc:
         logger.warning(
             "Модель не ответила — отказ вместо выдумки",
-            extra=safe_extra(question=question[:120], error=type(exc).__name__),
+            extra=safe_extra(
+                question=question[:120],
+                prompt_version=version,
+                error=type(exc).__name__,
+            ),
         )
         return RagAnswer(
             question=question,
@@ -212,8 +318,12 @@ async def answer(
         )
     logger.info(
         "RAG ответил",
+        # Версия промпта — в КАЖДОЙ записи, а не только в шапке прогона.
+        # Два прогона разных версий дают одинаковые с виду строки лога,
+        # и разобрать потом, где чьё, можно только по этому полю.
         extra=safe_extra(
             question=question[:120],
+            prompt_version=version,
             sources=len(answer_obj.sources),
             cited=len(answer_obj.cited),
             invented=len(invented),

@@ -52,12 +52,18 @@ from sqlalchemy import text
 from nutri_radar.config import Settings, get_settings
 from nutri_radar.db.session import get_session
 from nutri_radar.logging import safe_extra
+from nutri_radar.retrieval.language import (
+    RESOLVABLE_LANGUAGES,
+    UNDETERMINED,
+    detect_language,
+)
 from nutri_radar.retrieval.rag import RagAnswer
 from nutri_radar.retrieval.search import SearchResult
 
 logger = logging.getLogger(__name__)
 
 QUERIES_FILE = Path("data/retrieval/queries.jsonl")
+OUT_OF_DOMAIN_FILE = Path("data/retrieval/out_of_domain.jsonl")
 
 
 class GoldQuery(BaseModel):
@@ -87,6 +93,32 @@ class GoldQuery(BaseModel):
     @property
     def is_usable(self) -> bool:
         return bool(self.query.strip() and self.expected)
+
+
+class OutOfDomainQuestion(BaseModel):
+    """Вопрос, на который система обязана отказать по построению.
+
+    **Это не эталонная разметка.** У такого вопроса нет верного ответа
+    в составах продуктов — ни одного, ни тысячи, — поэтому размечать
+    нечего: ожидаемое поведение одно на весь файл и записано здесь,
+    в докстроке, а не в каждой строке файла.
+
+    Отличие от `GoldQuery` принципиальное и разнесено по разным файлам
+    намеренно. `MIN_SIMILARITY` ловит «в базе нет ничего похожего»:
+    косинус низкий, до модели дело не доходит. Эти вопросы проходят мимо
+    порога — «сколько стоит хлеб» находит хлеб с высокой близостью, —
+    и отказ должен наступить по другой причине. Смешать их с эталоном
+    поиска значило бы считать свойство выдачи по вопросам, у которых
+    выдачи быть не должно.
+    """
+
+    question: str
+    # Чем этот вопрос посторонний: цена, доставка, рецепт, погода,
+    # личный совет по питанию. Для разбивки в отчёте: по одним
+    # категориям система отказывает надёжнее, чем по другим.
+    kind: str = ""
+    lang: str = ""
+    author: str = ""
 
 
 @dataclass
@@ -130,6 +162,58 @@ class PropertyScore:
 
 
 @dataclass
+class LanguageScore:
+    """Совпал ли язык ответа с языком вопроса.
+
+    Язык вопроса **берётся из поля `lang` эталона, а не угадывается**:
+    угаданный язык вопроса добавил бы к измерению вторую ошибку,
+    и разделить их потом было бы нечем.
+    """
+
+    question: str
+    # Из эталона. Пустой — у запроса не проставлен язык, такие в долю
+    # не входят вовсе.
+    expected: str
+    # Из ответа, по алфавиту. `UNDETERMINED`, если ответ слишком короткий
+    # или система отказалась отвечать.
+    actual: str
+    # Отказалась ли система отвечать. Отдельным полем, а не выведенным
+    # из `actual == UNDETERMINED`: «система промолчала» и «ответ короче
+    # порога» — разные события с разными причинами, и в прогоне `rag_v2`
+    # их слияние дало строку отчёта «язык не определился: 14», за которой
+    # на самом деле стояли четырнадцать отказов.
+    refused: bool = False
+
+    @property
+    def is_resolvable(self) -> bool:
+        """Способен ли признак по алфавиту различить язык этого вопроса."""
+        return self.expected in RESOLVABLE_LANGUAGES
+
+    @property
+    def is_comparable(self) -> bool:
+        """Есть ли что сравнивать: язык вопроса различим, язык ответа определён."""
+        return self.is_resolvable and self.actual != UNDETERMINED
+
+    @property
+    def matched(self) -> bool:
+        return self.is_comparable and self.expected == self.actual
+
+
+@dataclass
+class RefusalScore:
+    """Отказала ли система на вопросе вне домена.
+
+    Одна величина и никакой оценки текста: отказ либо наступил, либо нет.
+    Судить о качестве формулировки отказа моделью было бы той же
+    самооценкой, от которой отказались в подтверждённости.
+    """
+
+    question: str
+    kind: str
+    refused: bool
+
+
+@dataclass
 class GroundingScore:
     """Подтверждённость одного ответа RAG."""
 
@@ -159,6 +243,12 @@ class RetrievalReport:
     properties: list[PropertyScore] = field(default_factory=list)
     recalls: list[RecallScore] = field(default_factory=list)
     groundings: list[GroundingScore] = field(default_factory=list)
+    languages: list[LanguageScore] = field(default_factory=list)
+    out_of_domain: list[RefusalScore] = field(default_factory=list)
+    # Версия промпта RAG, на которой считались числа. Без неё отчёты двух
+    # версий неразличимы, а сравнивать их построчно — единственный способ
+    # понять, что изменила правка промпта.
+    prompt_version: str = ""
 
     @property
     def mean_property_precision(self) -> float:
@@ -208,6 +298,71 @@ class RetrievalReport:
         return sum(item.invented for item in self.groundings)
 
     @property
+    def comparable_languages(self) -> list[LanguageScore]:
+        """Ответы, про которые вообще можно сказать, на каком они языке."""
+        return [item for item in self.languages if item.is_comparable]
+
+    @property
+    def language_match_share(self) -> float:
+        """Доля ответов на языке вопроса — среди тех, где язык определился.
+
+        Знаменатель — только сравнимые. Считать неопределившиеся промахами
+        значило бы наказывать систему за короткий ответ; считать их
+        попаданиями — прятать их. Поэтому они выведены отдельным числом.
+        """
+        comparable = self.comparable_languages
+        if not comparable:
+            return 0.0
+        return sum(1 for item in comparable if item.matched) / len(comparable)
+
+    @property
+    def out_of_domain_refusal_share(self) -> float:
+        """Доля честных отказов на вопросах вне домена.
+
+        Здесь отказ — это успех, в отличие от `refusal_share` на эталонных
+        запросах, где отказ означает, что система не нашла того, что есть
+        в базе. Два числа с похожим смыслом и противоположным знаком —
+        поэтому они считаются по разным наборам и в отчёте разведены.
+        """
+        if not self.out_of_domain:
+            return 0.0
+        return sum(1 for item in self.out_of_domain if item.refused) / len(self.out_of_domain)
+
+    @property
+    def language_refused(self) -> int:
+        """Запросы, где система отказалась отвечать.
+
+        Языка у отказа нет: его текст — константа проекта, а не выбор
+        модели. Считается отдельно от коротких ответов, потому что
+        причина другая и лечится другим.
+        """
+        return sum(1 for item in self.languages if item.is_resolvable and item.refused)
+
+    @property
+    def language_undetermined(self) -> int:
+        """Ответы, которые есть, но слишком коротки, чтобы судить о языке.
+
+        Отказы сюда **не входят**: строка отчёта «язык не определился»,
+        за которой стоят отказы, а не короткие ответы, читается неверно
+        и однажды уже прочиталась неверно.
+        """
+        return sum(
+            1
+            for item in self.languages
+            if item.is_resolvable and not item.refused and item.actual == UNDETERMINED
+        )
+
+    @property
+    def language_unresolvable(self) -> int:
+        """Запросы на языках, которых признак по алфавиту не различает.
+
+        Немецкий и французский: латиница, как у английского. Такие запросы
+        не входят в долю ни с какой стороны — это граница метода, и она
+        публикуется числом, а не умалчивается.
+        """
+        return sum(1 for item in self.languages if not item.is_resolvable)
+
+    @property
     def without_citations(self) -> int:
         return sum(1 for item in self.answered if not item.has_citations)
 
@@ -230,6 +385,48 @@ def read_queries(path: Path | None = None) -> list[GoldQuery]:
             queries.append(GoldQuery.model_validate_json(line))
     logger.info("Эталонные запросы прочитаны", extra=safe_extra(path=str(file), count=len(queries)))
     return queries
+
+
+def read_out_of_domain(path: Path | None = None) -> list[OutOfDomainQuestion]:
+    """Прочитать вопросы вне домена.
+
+    Отдельный файл, а не поле в эталоне поиска: по этим вопросам не
+    считаются ни свойство выдачи, ни recall — по ним считается ровно
+    одна величина, доля отказов. Держать их в одном файле значило бы
+    рано или поздно посчитать по ним не ту метрику.
+    """
+    file = path or OUT_OF_DOMAIN_FILE
+    if not file.exists():
+        raise FileNotFoundError(
+            f"Вопросы вне домена не найдены: {file}. Это перечень вопросов, "
+            "на которые система обязана отказывать; ожидаемое поведение "
+            "одно на весь файл — отказ."
+        )
+    questions = [
+        OutOfDomainQuestion.model_validate_json(line)
+        for line in file.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    logger.info(
+        "Вопросы вне домена прочитаны",
+        extra=safe_extra(path=str(file), count=len(questions)),
+    )
+    return questions
+
+
+def score_out_of_domain(question: OutOfDomainQuestion, answer: RagAnswer) -> RefusalScore:
+    """Отказала ли система на постороннем вопросе."""
+    score = RefusalScore(question=question.question, kind=question.kind, refused=answer.refused)
+    logger.info(
+        "Вопрос вне домена проверен",
+        extra=safe_extra(
+            question=question.question[:120],
+            kind=question.kind or "без типа",
+            refused=score.refused,
+            sources=len(answer.sources),
+        ),
+    )
+    return score
 
 
 def append_query(query: GoldQuery, path: Path | None = None) -> Path:
@@ -278,6 +475,33 @@ def score_property(query: GoldQuery, result: SearchResult, matching: set[str]) -
     )
 
 
+def score_language(query: GoldQuery, answer: RagAnswer, *, min_letters: int) -> LanguageScore:
+    """Сравнить язык ответа с языком вопроса.
+
+    Отказ не оценивается по языку: текст отказа — константа проекта,
+    а не выбор модели, и засчитывать его значило бы мерить собственную
+    строку. Такие записи получают `UNDETERMINED` и уходят в «не
+    определено», а не в промахи.
+    """
+    actual = (
+        UNDETERMINED if answer.refused else detect_language(answer.text, min_letters=min_letters)
+    )
+    score = LanguageScore(
+        question=query.query, expected=query.lang, actual=actual, refused=answer.refused
+    )
+    logger.info(
+        "Язык ответа проверен",
+        extra=safe_extra(
+            question=query.query[:120],
+            expected=score.expected or "не задан",
+            actual=score.actual or "не определено",
+            matched=score.matched,
+            refused=answer.refused,
+        ),
+    )
+    return score
+
+
 def score_grounding(answer: RagAnswer) -> GroundingScore:
     """Посчитать подтверждённость одного ответа.
 
@@ -292,12 +516,134 @@ def score_grounding(answer: RagAnswer) -> GroundingScore:
     )
 
 
+def _language_section(report: RetrievalReport) -> list[str]:
+    """Раздел отчёта о языке ответа.
+
+    Отдельной функцией, а не ещё сотней строк в `format_report`: раздел
+    целиком опциональный — без прогона RAG его в отчёте нет вовсе.
+    """
+    if not report.languages:
+        return []
+
+    comparable = report.comparable_languages
+    lines = [
+        "",
+        "## Язык ответа",
+        "",
+        "| Величина | Значение |",
+        "|---|---|",
+        f"| Ответов на языке вопроса | {report.language_match_share:.1%} |",
+        f"| Запросов в знаменателе | {len(comparable)} из {len(report.languages)} |",
+        f"| Система отказалась отвечать | {report.language_refused} |",
+        f"| Ответ короче порога, язык не определился | {report.language_undetermined} |",
+        f"| Язык вопроса неразличим признаком | {report.language_unresolvable} |",
+        "",
+        "Правило «отвечай на языке вопроса» **уже есть в промпте** — пунктом 5. "
+        "Поэтому число выше измеряет не отсутствие инструкции, а то, как часто "
+        "модель на 3B её игнорирует. Это разные вещи: первое чинится строкой "
+        "в промпте, второе — только структурным принуждением или сменой модели.",
+        "",
+        "Язык определяется по алфавиту — кириллица против латиницы. На паре "
+        "«русский и английский» признак не ошибается: у них не пересекаются "
+        "буквы. Ценой узости, и она здесь не теоретическая: в эталоне поиска "
+        "есть запросы на немецком и французском, и на них признак отвечает "
+        "«английский» всегда — алфавит общий. Такие запросы выведены из доли "
+        "целиком, отдельной строкой таблицы: записать их в промахи значило бы "
+        "измерить ограничение прибора, а не систему. Ответы, где букв меньше "
+        "порога, тоже в долю не входят — иначе метрика мерила бы длину ответа. "
+        "Язык вопроса берётся из поля `lang` эталона, а не угадывается.",
+        "",
+        "Отказы выведены отдельной строкой, а не свалены в «не определился». "
+        "У отказа нет языка: его текст — константа проекта, а не выбор модели. "
+        "Строка «язык не определился», за которой стоят отказы, читается как "
+        "«ответы вышли слишком короткими» — и однажды уже прочиталась так.",
+    ]
+
+    mismatched = [score for score in comparable if not score.matched]
+    if mismatched:
+        lines += [
+            "",
+            "### Ответы не на языке вопроса",
+            "",
+            "| Вопрос | Спросили на | Ответили на |",
+            "|---|---|---|",
+        ]
+        lines += [
+            f"| {score.question} | {score.expected} | {score.actual} |" for score in mismatched
+        ]
+    return lines
+
+
+def _out_of_domain_section(report: RetrievalReport) -> list[str]:
+    """Раздел отчёта об отказах на посторонних вопросах."""
+    if not report.out_of_domain:
+        return []
+
+    lines = [
+        "",
+        "## Отказ на вопросах вне домена",
+        "",
+        "| Величина | Значение |",
+        "|---|---|",
+        f"| Вопросов вне домена | {len(report.out_of_domain)} |",
+        f"| Честных отказов | {report.out_of_domain_refusal_share:.1%} |",
+        "",
+        "**Это не тот отказ, что выше.** В разделе о подтверждённости отказ "
+        "означает неудачу: система не нашла того, что в базе есть. Здесь отказ "
+        "— успех: вопрос про цену, доставку или личный совет по питанию лежит "
+        "за границами продукта, и отвечать на него инструмент прозрачности "
+        "состава не должен.",
+        "",
+        "Порог `MIN_SIMILARITY` такие вопросы **не ловит**. Он отсекает «в базе "
+        "нет ничего похожего», а «сколько стоит хлеб» находит хлеб с высокой "
+        "близостью: в базе он есть, просто вопрос не про состав. Отказ здесь "
+        "обязан наступить по другой причине, и число выше показывает, "
+        "наступает ли он вообще.",
+    ]
+
+    grouped: dict[str, list[RefusalScore]] = {}
+    for score in report.out_of_domain:
+        grouped.setdefault(score.kind or "без типа", []).append(score)
+    if len(grouped) > 1:
+        lines += [
+            "",
+            "### По категориям посторонних вопросов",
+            "",
+            "| Категория | Вопросов | Отказов |",
+            "|---|---|---|",
+        ]
+        for kind, scores in sorted(grouped.items()):
+            refused = sum(1 for score in scores if score.refused)
+            lines.append(f"| {kind} | {len(scores)} | {refused / len(scores):.0%} |")
+
+    answered = [score for score in report.out_of_domain if not score.refused]
+    if answered:
+        lines += [
+            "",
+            "### Вопросы, на которые система всё же ответила",
+            "",
+            "| Вопрос | Категория |",
+            "|---|---|",
+        ]
+        lines += [f"| {score.question} | {score.kind or 'без типа'} |" for score in answered]
+    return lines
+
+
 def format_report(report: RetrievalReport) -> str:
     """Отчёт по метрикам поиска и RAG."""
     total = len(report.properties) or len(report.recalls)
     lines = [
         f"# Поиск и RAG: метрики на {total} эталонных запросах",
         "",
+    ]
+    if report.prompt_version:
+        lines += [
+            f"Версия промпта RAG: **{report.prompt_version}**. Числа привязаны "
+            "к ней: смена версии делает прошлые значения несравнимыми, поэтому "
+            "они пересчитываются, а не переносятся.",
+            "",
+        ]
+    lines += [
         f"## Свойство выдачи (top-{report.k})",
         "",
         "| Величина | Значение |",
@@ -365,6 +711,10 @@ def format_report(report: RetrievalReport) -> str:
         "Выдуманный штрихкод — самый опасный из отказов: утверждение выглядит "
         "подтверждённым, а проверить может только тот, кто пойдёт в базу.",
     ]
+
+    lines += _language_section(report)
+    lines += _out_of_domain_section(report)
+
     return "\n".join(lines)
 
 

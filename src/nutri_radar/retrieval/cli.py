@@ -10,6 +10,7 @@ import asyncio
 import logging
 import sys
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 
 import httpx
 import typer
@@ -19,6 +20,7 @@ from nutri_radar.db.session import dispose_engine
 from nutri_radar.llm.adapters import OllamaEmbeddings
 from nutri_radar.llm.factory import build_llm
 from nutri_radar.llm.runtime import get_runtime
+from nutri_radar.logging import safe_extra
 from nutri_radar.retrieval.embed import (
     build_index,
     count_candidates,
@@ -31,8 +33,11 @@ from nutri_radar.retrieval.metrics import (
     append_query,
     format_report,
     matching_codes,
+    read_out_of_domain,
     read_queries,
     score_grounding,
+    score_language,
+    score_out_of_domain,
     score_property,
     score_recall,
     write_report,
@@ -42,6 +47,7 @@ from nutri_radar.retrieval.pipeline import embed_texts, search_by_text
 from nutri_radar.retrieval.rag import answer as rag_answer
 from nutri_radar.retrieval.search import SearchFilters
 from nutri_radar.retrieval.search import search as search_products
+from nutri_radar.retrieval.switching import measure as measure_switching
 
 logger = logging.getLogger(__name__)
 
@@ -264,21 +270,71 @@ def add_query(
 def evaluate(
     limit: int = typer.Option(0, "--limit", help="Сколько возвращать; 0 — из настроек."),
     with_rag: bool = typer.Option(True, "--rag/--no-rag", help="Считать и подтверждённость."),
+    with_out_of_domain: bool = typer.Option(
+        True,
+        "--out-of-domain/--no-out-of-domain",
+        help="Считать долю отказов на вопросах вне домена.",
+    ),
+    ood_limit: int = typer.Option(
+        0,
+        "--ood-limit",
+        help="Сколько вопросов вне домена прогнать; 0 — все. Для замера перед полным прогоном.",
+    ),
+    report: str = typer.Option(
+        "",
+        "--report",
+        help="Куда писать отчёт. Пусто — путь по умолчанию. Нужно, чтобы прогон "
+        "другой версии промпта не затёр числа предыдущей.",
+    ),
 ) -> None:
-    """Посчитать recall@k и подтверждённость на эталонных запросах."""
+    """Посчитать метрики поиска и RAG на эталонных запросах.
+
+    Считаются четыре величины: доля выдачи с запрошенным свойством,
+    подтверждённость ответа, доля ответов на языке вопроса и доля честных
+    отказов на вопросах вне домена. **Числа публикуются как есть**,
+    включая плохие: замер, подправленный под ожидание, ничего не измеряет.
+
+    Вопросы вне домена идут отдельным набором и отдельной метрикой: по ним
+    не считаются ни свойство выдачи, ни подтверждённость — верного ответа
+    у них нет, и мерить по ним качество поиска значило бы смешать два
+    разных измерения.
+    """
     settings = get_settings()
     queries = read_queries()
+    outsiders = read_out_of_domain() if (with_rag and with_out_of_domain) else []
+    if ood_limit:
+        outsiders = outsiders[:ood_limit]
     top_k = limit or settings.retrieval.top_k
+    min_letters = settings.retrieval.language_min_letters
+
+    logger.info(
+        "Замер метрик поиска начат",
+        extra=safe_extra(
+            gold=len(queries),
+            out_of_domain=len(outsiders),
+            top_k=top_k,
+            with_rag=with_rag,
+            prompt_version=settings.retrieval.rag_prompt_version,
+        ),
+    )
 
     async def run() -> None:
-        report = RetrievalReport(k=top_k)
+        metrics_report = RetrievalReport(
+            k=top_k, prompt_version=settings.retrieval.rag_prompt_version
+        )
         async with httpx.AsyncClient(base_url=settings.ollama.base_url) as client:
+            # Оба набора векторизуются одним заходом: модель эмбеддингов
+            # грузится в VRAM один раз, а не дважды с выгрузкой между.
             vectors = await embed_texts(
-                [item.query for item in queries], client=client, settings=settings
+                [item.query for item in queries] + [item.question for item in outsiders],
+                client=client,
+                settings=settings,
             )
+            gold_vectors = vectors[: len(queries)]
+            ood_vectors = vectors[len(queries) :]
 
             results = []
-            for gold, vector in zip(queries, vectors, strict=True):
+            for gold, vector in zip(queries, gold_vectors, strict=True):
                 result = await search_products(
                     vector, query=gold.query, limit=top_k, settings=settings
                 )
@@ -286,10 +342,17 @@ def evaluate(
                     # Свойство проверяется тем же условием, которым эталон
                     # и определялся: один запрос в базу на выдачу.
                     matching = await matching_codes(gold.predicate, result.codes, settings)
-                    report.properties.append(score_property(gold, result, matching))
+                    metrics_report.properties.append(score_property(gold, result, matching))
                 if gold.expected:
-                    report.recalls.append(score_recall(gold, result))
+                    metrics_report.recalls.append(score_recall(gold, result))
                 results.append((gold, result))
+
+            ood_results = []
+            for outsider, vector in zip(outsiders, ood_vectors, strict=True):
+                result = await search_products(
+                    vector, query=outsider.question, limit=top_k, settings=settings
+                )
+                ood_results.append((outsider, result))
 
             if with_rag:
                 llm = build_llm(settings, client)
@@ -297,12 +360,73 @@ def evaluate(
                 # модель не выгружается, иначе прогон по эталону превратился
                 # бы в двадцать перезагрузок весов.
                 async with get_runtime(settings).hold(llm.model_name):
-                    for gold, result in results:
+                    for index, (gold, result) in enumerate(results, start=1):
                         answer = await rag_answer(gold.query, result, llm, settings)
-                        report.groundings.append(score_grounding(answer))
+                        metrics_report.groundings.append(score_grounding(answer))
+                        metrics_report.languages.append(
+                            score_language(gold, answer, min_letters=min_letters)
+                        )
+                        logger.info(
+                            "Эталонный запрос обработан",
+                            extra=safe_extra(done=index, total=len(results)),
+                        )
+                    for index, (outsider, result) in enumerate(ood_results, start=1):
+                        answer = await rag_answer(outsider.question, result, llm, settings)
+                        metrics_report.out_of_domain.append(score_out_of_domain(outsider, answer))
+                        logger.info(
+                            "Вопрос вне домена обработан",
+                            extra=safe_extra(done=index, total=len(ood_results)),
+                        )
 
-        text = format_report(report)
+        text = format_report(metrics_report)
+        path = write_report(text, Path(report) if report else None)
         typer.echo(_printable(text))
-        typer.echo(f"\nОтчёт записан -> {write_report(text)}")
+        logger.info(
+            "Замер метрик поиска завершён",
+            extra=safe_extra(
+                prompt_version=metrics_report.prompt_version,
+                language_match_share=round(metrics_report.language_match_share, 3),
+                language_undetermined=metrics_report.language_undetermined,
+                out_of_domain_refusal_share=round(metrics_report.out_of_domain_refusal_share, 3),
+                report=str(path),
+            ),
+        )
+        typer.echo(f"\nОтчёт записан -> {path}")
+
+    _run(run)
+
+
+@app.command("switch-benchmark")
+def switch_benchmark(
+    questions: int = typer.Option(
+        0, "--questions", help="Сколько вопросов взять из эталона; 0 — из настроек."
+    ),
+    report: str = typer.Option(
+        "reports/m7_model_switching.md", "--report", help="Куда записать отчёт."
+    ),
+) -> None:
+    """Замерить, во что обходится смена модели на 6 ГБ VRAM.
+
+    Одни и те же вопросы прогоняются дважды: подряд на одной модели
+    и с чередованием, требующим выгружать веса. Разница медиан — цена
+    загрузки весов.
+
+    **Замер, а не оптимизация.** Число не предлагается уменьшать: это
+    цена того, что модель генерации и модель эмбеддингов не помещаются
+    в видеопамять одновременно. Оно идёт в README как ограничение железа.
+    """
+    settings = get_settings()
+    size = questions or settings.retrieval.switch_benchmark_size
+    # Вопросы берутся из эталона, а не выдумываются здесь: замер должен
+    # идти на том же, на чём считаются метрики, иначе числа двух замеров
+    # не о том же самом.
+    asked = [item.query for item in read_queries()[:size]]
+
+    async def run() -> None:
+        async with httpx.AsyncClient(base_url=settings.ollama.base_url) as client:
+            benchmark = await measure_switching(asked, client=client, settings=settings)
+        text = benchmark.format()
+        typer.echo(_printable(text))
+        typer.echo(f"\nОтчёт записан -> {write_report(text, Path(report))}")
 
     _run(run)

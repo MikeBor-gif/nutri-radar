@@ -27,8 +27,28 @@ class RagPrompt:
     version: str
     template: str
 
-    def render(self, *, question: str, products: str) -> str:
-        return self.template.format(question=question, products=products)
+    @property
+    def forces_language(self) -> bool:
+        """Требует ли эта версия правила о языке ответа отдельным блоком.
+
+        Определяется наличием плейсхолдера, а не списком версий в коде:
+        список пришлось бы править в двух местах при каждой новой версии,
+        и он разошёлся бы с файлами на диске — ровно так ломается
+        сравнимость замеров.
+        """
+        return "{language_rule}" in self.template
+
+    def render(self, *, question: str, products: str, language_rule: str = "") -> str:
+        """Подставить вопрос, продукты и правило о языке.
+
+        Версии без `{language_rule}` просто игнорируют лишний аргумент:
+        `str.format` не возражает против неиспользованных ключей. Это
+        сознательно — иначе вызывающий код ветвился бы по версии промпта,
+        а решать, что делать с плейсхолдером, должен шаблон.
+        """
+        return self.template.format(
+            question=question, products=products, language_rule=language_rule
+        )
 
 
 def available_versions() -> list[str]:

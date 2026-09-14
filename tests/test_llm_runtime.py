@@ -21,6 +21,12 @@ import pytest
 
 from nutri_radar.config import Settings
 from nutri_radar.llm.runtime import ModelRuntime, get_runtime
+from nutri_radar.retrieval.switching import (
+    ALTERNATING,
+    BATCHED,
+    SwitchBenchmark,
+    SwitchRun,
+)
 
 
 @pytest.fixture
@@ -193,3 +199,109 @@ class TestДиагностика:
         assert runtime.active_calls == 0
         async with runtime.hold("B"):
             pass
+
+
+class TestСчётчикПереключений:
+    """Счётчик нужен не для диагностики, а для замера цены смены модели.
+
+    Само поведение очереди — выгружать при смене и не выгружать при
+    повторе — уже проверено в `TestВыгрузка`. Здесь проверяется, что
+    число, которое пойдёт в README как цена 6 ГБ VRAM, посчитано верно.
+    """
+
+    async def test_первая_загрузка_не_переключение(self, runtime: ModelRuntime) -> None:
+        """Платить за неё придётся в любом случае.
+
+        Замер спрашивает про цену **чередования**; засчитать сюда первую
+        загрузку значило бы завысить её ровно на одну — и тем сильнее,
+        чем короче прогон.
+        """
+        async with runtime.hold("A"):
+            pass
+        assert runtime.switches == 0
+        assert runtime.loads == 1
+
+    async def test_повтор_той_же_модели_не_считается(self, runtime: ModelRuntime) -> None:
+        for _ in range(3):
+            async with runtime.hold("A"):
+                pass
+        assert runtime.switches == 0
+        assert runtime.loads == 1
+
+    async def test_чередование_считается_на_каждую_смену(self, runtime: ModelRuntime) -> None:
+        for model in ("A", "B", "A", "B"):
+            async with runtime.hold(model):
+                pass
+        assert runtime.switches == 3
+        assert runtime.loads == 4
+
+    async def test_счётчик_совпадает_с_числом_выгрузок(self, runtime: ModelRuntime) -> None:
+        """Переключение и выгрузка — одно событие, а не два похожих."""
+        unloaded: list[str] = []
+
+        def unloader(name: str):
+            async def unload() -> None:
+                unloaded.append(name)
+
+            return unload
+
+        for model in ("A", "B", "A"):
+            async with runtime.hold(model, unload=unloader(model)):
+                pass
+
+        assert runtime.switches == 2
+        assert unloaded == ["A", "B"]
+
+
+class TestСимметрияЗамераПереключений:
+    """Замер двух режимов обязан мерить их по одним правилам.
+
+    Первая версия `switching.py` засекала в режиме «подряд» только поиск
+    и генерацию, а векторизацию и переключение на модель генерации этот
+    режим платил вне таймера. Разница режимов переставала быть разницей
+    в переключениях, и цена переключения выходила завышенной примерно
+    на четверть. Число при этом уже стояло в README.
+
+    Здесь проверяется арифметика свода на подставных величинах: сети
+    и моделей тут нет, есть только вопрос «сходится ли то, что мы делим,
+    с тем, на что делим».
+    """
+
+    def test_разовая_работа_входит_в_итог(self) -> None:
+        run = SwitchRun(mode=BATCHED, latencies=[1.0, 2.0, 3.0], shared_s=6.0)
+        assert run.total == pytest.approx(12.0)
+
+    def test_разовая_работа_делится_по_вопросам_поровну(self) -> None:
+        """Приписать её первому вопросу так же неверно, как не считать."""
+        run = SwitchRun(mode=BATCHED, latencies=[1.0, 2.0, 3.0], shared_s=6.0)
+        assert run.per_question == pytest.approx([3.0, 4.0, 5.0])
+        assert run.median == pytest.approx(4.0)
+
+    def test_без_разовой_работы_медиана_прежняя(self) -> None:
+        run = SwitchRun(mode=ALTERNATING, latencies=[10.0, 14.0, 12.0])
+        assert run.median == pytest.approx(12.0)
+        assert run.total == pytest.approx(36.0)
+
+    def test_цена_переключения_делится_на_разницу_переключений(self) -> None:
+        """Вопрос с чередованием стоит двух переключений, а не одного.
+
+        Поделить разницу на число вопросов значило бы завысить цену вдвое.
+        """
+        benchmark = SwitchBenchmark(
+            model="gen",
+            embedding_model="emb",
+            batched=SwitchRun(mode=BATCHED, latencies=[1.0, 1.0, 1.0], shared_s=7.0, switches=2),
+            alternating=SwitchRun(mode=ALTERNATING, latencies=[10.0, 10.0, 10.0], switches=6),
+        )
+        # (30 - 10) / (6 - 2) = 5
+        assert benchmark.cost_per_switch == pytest.approx(5.0)
+        assert benchmark.questions == 3
+
+    def test_нулевая_разница_переключений_не_делит_на_ноль(self) -> None:
+        benchmark = SwitchBenchmark(
+            model="gen",
+            embedding_model="emb",
+            batched=SwitchRun(mode=BATCHED, latencies=[1.0], switches=2),
+            alternating=SwitchRun(mode=ALTERNATING, latencies=[2.0], switches=2),
+        )
+        assert benchmark.cost_per_switch == 0.0

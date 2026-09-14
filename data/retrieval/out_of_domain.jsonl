@@ -1,0 +1,20 @@
+{"question": "сколько стоит батон белого хлеба", "kind": "цена", "lang": "ru", "author": "claude"}
+{"question": "где дешевле купить молочный шоколад", "kind": "цена", "lang": "ru", "author": "claude"}
+{"question": "how much does a jar of nutella cost", "kind": "цена", "lang": "en", "author": "claude"}
+{"question": "есть ли скидка на йогурты на этой неделе", "kind": "цена", "lang": "ru", "author": "claude"}
+{"question": "когда привезут мой заказ", "kind": "доставка", "lang": "ru", "author": "claude"}
+{"question": "вы доставляете в Казань", "kind": "доставка", "lang": "ru", "author": "claude"}
+{"question": "how do i return a damaged package", "kind": "доставка", "lang": "en", "author": "claude"}
+{"question": "как испечь шоколадный кекс", "kind": "рецепт", "lang": "ru", "author": "claude"}
+{"question": "сколько минут варить овсянку", "kind": "рецепт", "lang": "ru", "author": "claude"}
+{"question": "give me a recipe for homemade granola", "kind": "рецепт", "lang": "en", "author": "claude"}
+{"question": "чем заменить сахар в тесте", "kind": "рецепт", "lang": "ru", "author": "claude"}
+{"question": "какая завтра погода в Москве", "kind": "вне темы", "lang": "ru", "author": "claude"}
+{"question": "who won the world cup in 2022", "kind": "вне темы", "lang": "en", "author": "claude"}
+{"question": "переведи слово sucre на русский", "kind": "вне темы", "lang": "ru", "author": "claude"}
+{"question": "что мне есть, чтобы похудеть на 5 кг", "kind": "личный совет", "lang": "ru", "author": "claude"}
+{"question": "сколько калорий мне нужно в день", "kind": "личный совет", "lang": "ru", "author": "claude"}
+{"question": "какой шоколад можно есть при диабете", "kind": "личный совет", "lang": "ru", "author": "claude"}
+{"question": "is this yogurt safe for my child with a milk allergy", "kind": "личный совет", "lang": "en", "author": "claude"}
+{"question": "составь мне меню на неделю", "kind": "личный совет", "lang": "ru", "author": "claude"}
+{"question": "какие продукты вредные, а какие полезные", "kind": "личный совет", "lang": "ru", "author": "claude"}
